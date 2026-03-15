@@ -220,12 +220,13 @@ This skill runs on Haiku to keep scanning costs low. Perform the triage directly
 1. Compute `REPO_ID` and `RUNTIME_DIR`.
 2. Detect the default branch: `DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name')`
 3. Read the label from `.claude/autopilot-config.json` (default: `Claude`).
-4. Check if there is already an active autopilot issue being worked on. Look for `$RUNTIME_DIR/active-issue-auto.txt`. If it exists, read it:
-   - Run `gh pr view <PR_NUMBER> --json state,reviews,comments` to check the PR state.
-   - If the PR is **merged**: proceed to **After Merge** cleanup (see below), then loop back to step 5 to check for the next issue.
-   - If the PR is **still open with review comments that need addressing**: proceed to **Step 2** with action `ADDRESS_REVIEWS`.
-   - If the PR is **still open with no action needed**: say "PR still open, no action needed." and **stop**. Do not pick up another issue.
-5. If no active issue, scan for the next issue to work on:
+4. Check if there is already an active issue being worked on. Check **both** `$RUNTIME_DIR/active-issue-auto.txt` and `$RUNTIME_DIR/active-issue-manual.txt`. If either exists, read it and check the PR:
+   - Run `gh pr view <PR_NUMBER> --json state,reviews,comments` to check the PR.
+   - **IMPORTANT: You MUST examine the `reviews` and `comments` arrays in the response.** Do not just check `state`. Look for comments or reviews authored by someone other than yourself that arrived after your last comment. Any such comment means there is feedback to address.
+   - If the PR is **merged**: proceed to **After Merge** cleanup (see below). If it was `active-issue-auto.txt`, loop back to step 5 to check for the next issue. If it was `active-issue-manual.txt`, stop after cleanup.
+   - If the PR is **still open with unaddressed review comments or PR comments**: proceed to **Step 2** with action `ADDRESS_REVIEWS`. Pass the PR number, branch name, and the content of the comments to the subagent.
+   - If the PR is **still open with no new comments to address**: say "PR still open, no action needed." and **stop**. Do not pick up another issue.
+5. If no active issue (neither file exists), scan for the next issue to work on:
    ```
    gh issue list --label "<LABEL>" --state open --json number,title,body --limit 1
    ```
