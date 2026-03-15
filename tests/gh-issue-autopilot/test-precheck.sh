@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# Tests for the precheck.sh script
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../helpers.sh"
+
+PRECHECK="$REPO_ROOT/skills/gh-issue-autopilot/precheck.sh"
+
+echo -e "${BOLD}gh-issue-autopilot: Pre-check Script${RESET}"
+echo ""
+
+# ── Script exists and is executable ───────────────────────────────
+
+echo -e "${BOLD}Script basics${RESET}"
+
+test_start "precheck exists"
+assert "precheck.sh exists" test -f "$PRECHECK"
+assert "precheck.sh is executable" test -x "$PRECHECK"
+
+# ── No work scenario (live check against current repo) ────────────
+
+echo ""
+echo -e "${BOLD}No-work detection (live)${RESET}"
+
+# Run precheck from the real repo but with a label that has no issues.
+# Temporarily create a config with an impossible label, then restore.
+TEMP_DIR="$(mktemp -d)"
+trap 'cleanup_temp "$TEMP_DIR"' EXIT
+
+CONFIG_FILE="$REPO_ROOT/.claude/autopilot-config.json"
+BACKUP_FILE="$TEMP_DIR/autopilot-config.json.bak"
+
+# Back up existing config if present
+if [ -f "$CONFIG_FILE" ]; then
+  cp "$CONFIG_FILE" "$BACKUP_FILE"
+fi
+mkdir -p "$REPO_ROOT/.claude"
+echo '{"label": "nonexistent-label-xyz-12345"}' > "$CONFIG_FILE"
+
+# Run precheck from the repo root (no active issue, no matching issues)
+test_start "exits non-zero when no work"
+output="$(cd "$REPO_ROOT" && bash "$PRECHECK" 2>&1)" && exit_code=0 || exit_code=$?
+
+# Restore config
+if [ -f "$BACKUP_FILE" ]; then
+  mv "$BACKUP_FILE" "$CONFIG_FILE"
+else
+  rm -f "$CONFIG_FILE"
+fi
+
+assert "exits non-zero" test "$exit_code" -ne 0
+assert_contains "outputs NO_WORK" "$output" "NO_WORK"
+
+# ── Active issue scenario ─────────────────────────────────────────
+
+echo ""
+echo -e "${BOLD}Active issue detection${RESET}"
+
+# Create a fake active-issue.txt in the runtime dir
+REPO_ID=$(gh repo view --json url --jq '.url' | md5sum | cut -c1-12)
+RUNTIME_DIR="/tmp/autopilot-${REPO_ID}"
+mkdir -p "$RUNTIME_DIR"
+
+# Save and restore state
+HAD_ACTIVE_ISSUE=false
+if [ -f "$RUNTIME_DIR/active-issue.txt" ]; then
+  HAD_ACTIVE_ISSUE=true
+  cp "$RUNTIME_DIR/active-issue.txt" "$RUNTIME_DIR/active-issue.txt.bak"
+fi
+
+echo "99 200 issue-99-test" > "$RUNTIME_DIR/active-issue.txt"
+
+test_start "exits zero when active issue exists"
+output="$(bash "$PRECHECK" 2>&1)" && exit_code=0 || exit_code=$?
+assert_equals "exits zero" "0" "$exit_code"
+assert_contains "outputs ACTIVE_ISSUE" "$output" "ACTIVE_ISSUE"
+
+# Restore
+if [ "$HAD_ACTIVE_ISSUE" = true ]; then
+  mv "$RUNTIME_DIR/active-issue.txt.bak" "$RUNTIME_DIR/active-issue.txt"
+else
+  rm -f "$RUNTIME_DIR/active-issue.txt"
+fi
+
+echo ""
+test_summary "Pre-check Script"

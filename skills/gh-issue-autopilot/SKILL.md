@@ -3,7 +3,7 @@ name: gh-issue-autopilot
 description: Solve GitHub Issues automatically or interactively. No args = autopilot loop (worktree). Issue number = interactive mode. Also supports setup, label config, and stop.
 disable-model-invocation: true
 allowed-tools: Bash, Read, Edit, Write, Glob, Grep, Agent, Skill, CronCreate, CronDelete
-argument-hint: "[<issue-number> | stop | setup | label <name>]"
+argument-hint: "[<issue-number> | stop | setup | label <name> | interval <minutes>]"
 ---
 
 # GitHub Issue Autopilot
@@ -17,6 +17,7 @@ Solve GitHub Issues either automatically (loop mode in a worktree) or interactiv
 - `/gh-issue-autopilot stop` — Stop the autopilot loop and cancel the recurring scan.
 - `/gh-issue-autopilot setup` — Check prerequisites and help configure the repo for this skill.
 - `/gh-issue-autopilot label <name>` — Set the GitHub issue label used by automatic mode (default: `Claude`).
+- `/gh-issue-autopilot interval <minutes>` — Set the scan interval in minutes (default: `5`).
 
 ## Argument Routing
 
@@ -26,6 +27,7 @@ Parse the argument to determine the mode:
 - `scan` → **Scan** (internal, triggered by cron)
 - `setup` → **Setup**
 - `label ...` → **Label config** (everything after `label ` is the label name)
+- `interval ...` → **Interval config** (everything after `interval ` is the number of minutes)
 - A number (e.g., `123`) → **Manual mode** for that issue number
 - Anything else → treat as automatic mode
 
@@ -41,7 +43,8 @@ Stored in the repo's `.claude/` directory. Persists across sessions.
 
 ```json
 {
-  "label": "Claude"
+  "label": "Claude",
+  "interval": 5
 }
 ```
 
@@ -75,6 +78,15 @@ Cache the result in a shell variable for the duration of the operation.
 4. Tell the user the label has been updated.
 5. When scanning for issues, always read the label from this config. Pass the label as-is to `gh issue list --label`, which is already case-insensitive.
 
+### Interval configuration (`/gh-issue-autopilot interval <minutes>`)
+
+1. Read the current config from `.claude/autopilot-config.json` (or start with defaults).
+2. Validate that the provided value is a positive integer (minimum 1).
+3. Set the `interval` field to the provided number.
+4. Write the updated config back to `.claude/autopilot-config.json`.
+5. Tell the user the interval has been updated.
+6. Note: if autopilot is already running, the user must stop and restart it for the new interval to take effect.
+
 ---
 
 ## Setup (`/gh-issue-autopilot setup`)
@@ -93,6 +105,7 @@ Run these checks and report pass/fail for each:
 6. **Git worktree support**: `git worktree list` (just confirm it doesn't error)
 7. **Current label**: Read from `.claude/autopilot-config.json` or show default (`Claude`)
 8. **Label exists in repo**: `gh label list --json name --jq '.[].name'` — check if the configured label exists (case-insensitive). If not, offer to create it.
+9. **Scan interval**: Read from `.claude/autopilot-config.json` or show default (`5` minutes)
 
 ### Step 2: Check CLAUDE.md
 
@@ -128,9 +141,10 @@ Fully autonomous. Scans for issues, solves them, sends PRs, waits for merge, cle
 2. Compute `REPO_ID` and `RUNTIME_DIR` (see File Storage above).
 3. Detect the default branch: `DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name')`
 4. Read the label from `.claude/autopilot-config.json` (default: `Claude`).
-5. Run the scan logic below **immediately** (don't wait for the first cron tick).
-6. Schedule a recurring cron job every 5 minutes with the prompt: `/gh-issue-autopilot scan`
-7. Store the cron job ID by writing to `$RUNTIME_DIR/cron-id.txt`.
+5. Read the interval from `.claude/autopilot-config.json` (default: `5` minutes).
+6. Run the scan logic below **immediately** (don't wait for the first cron tick).
+7. Schedule a recurring cron job using the configured interval with the prompt: `/gh-issue-autopilot scan`
+8. Store the cron job ID by writing to `$RUNTIME_DIR/cron-id.txt`.
 
 ### Stopping (`/gh-issue-autopilot stop`)
 
@@ -142,6 +156,14 @@ Fully autonomous. Scans for issues, solves them, sends PRs, waits for merge, cle
 6. Do NOT do anything else.
 
 ### Scanning (`/gh-issue-autopilot scan` — triggered by cron, or the initial scan on start)
+
+**Step 0 — Pre-check (token-saving gate):**
+Run the pre-check script as the very first action. This avoids burning tokens on multiple tool calls when there's nothing to do:
+```bash
+bash "$(dirname "$(readlink -f ~/.claude/skills/gh-issue-autopilot/SKILL.md)")/precheck.sh"
+```
+- If it exits **non-zero**: say "No work found." and **stop immediately**. Do not run any other commands.
+- If it exits **zero**: proceed with the full scan below.
 
 1. Compute `REPO_ID` and `RUNTIME_DIR`.
 2. Detect the default branch: `DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name')`
@@ -218,9 +240,10 @@ Interactive, single-issue mode. More collaborative during planning and implement
 1. Commit and push the branch.
 2. Create a PR targeting `$DEFAULT_BRANCH`, following the project's PR conventions (see CLAUDE.md).
 3. Write the issue number and PR number to `$RUNTIME_DIR/active-issue.txt` in the format: `ISSUE_NUMBER PR_NUMBER BRANCH_NAME MANUAL`
-4. Schedule a recurring cron job every 5 minutes with the prompt: `/gh-issue-autopilot scan`
-5. Store the cron job ID by writing to `$RUNTIME_DIR/cron-id.txt`.
-6. Tell the user the PR is created and monitoring has started.
+4. Read the interval from `.claude/autopilot-config.json` (default: `5` minutes).
+5. Schedule a recurring cron job using the configured interval with the prompt: `/gh-issue-autopilot scan`
+6. Store the cron job ID by writing to `$RUNTIME_DIR/cron-id.txt`.
+7. Tell the user the PR is created and monitoring has started.
 
 From this point, the scan loop handles PR review comments and post-merge cleanup. Because the active issue file contains `MANUAL`, the scan loop will clean up and stop after this issue is done — it will NOT scan for more issues.
 

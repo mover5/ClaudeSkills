@@ -11,6 +11,7 @@ A Claude Code skill that solves GitHub issues automatically or interactively.
 | `/gh-issue-autopilot setup` | Setup | Checks prerequisites (`gh` CLI, auth, permissions, labels) and helps configure your repo. |
 | `/gh-issue-autopilot stop` | Stop | Stops the autopilot scanning loop. |
 | `/gh-issue-autopilot label <name>` | Config | Sets the issue label that autopilot scans for (default: `Claude`). |
+| `/gh-issue-autopilot interval <minutes>` | Config | Sets the scan interval in minutes (default: `5`). |
 
 ## How It Works
 
@@ -46,7 +47,8 @@ Stored in `.claude/autopilot-config.json`:
 
 ```json
 {
-  "label": "Claude"
+  "label": "Claude",
+  "interval": 5
 }
 ```
 

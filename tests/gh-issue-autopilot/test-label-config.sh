@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Tests for label configuration (reading/writing autopilot-config.json)
+# Tests for config (label + interval) in autopilot-config.json
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../helpers.sh"
 
-echo -e "${BOLD}gh-issue-autopilot: Label Configuration${RESET}"
+echo -e "${BOLD}gh-issue-autopilot: Config (Label + Interval)${RESET}"
 echo ""
 
 # Use a temp directory to simulate a repo's .claude/ dir
@@ -84,5 +84,80 @@ test_start "empty config object"
 label="$(get_label "$CONFIG_FILE")"
 assert_equals "falls back to empty string for missing key" "" "$label"
 
+# ══════════════════════════════════════════════════════════════════
+# Interval configuration
+# ══════════════════════════════════════════════════════════════════
+
 echo ""
-test_summary "Label Configuration"
+echo -e "${BOLD}── Interval Configuration ──${RESET}"
+echo ""
+
+# Simulate reading the interval (same logic the skill uses)
+get_interval() {
+  local cfg="$1"
+  if [ -f "$cfg" ]; then
+    local match
+    match="$(grep -o '"interval"[[:space:]]*:[[:space:]]*[0-9]\+' "$cfg" || true)"
+    if [ -n "$match" ]; then
+      echo "$match" | head -1 | sed 's/.*"interval"[[:space:]]*:[[:space:]]*//'
+    else
+      echo "5"
+    fi
+  else
+    echo "5"
+  fi
+}
+
+# ── Default interval ─────────────────────────────────────────────
+
+echo -e "${BOLD}Default interval when no config exists${RESET}"
+
+rm -f "$CONFIG_FILE"
+test_start "default interval"
+interval="$(get_interval "$CONFIG_FILE")"
+assert_equals "default interval is 5" "5" "$interval"
+
+# ── Custom interval ──────────────────────────────────────────────
+
+echo ""
+echo -e "${BOLD}Custom interval${RESET}"
+
+echo '{"label": "Claude", "interval": 15}' > "$CONFIG_FILE"
+test_start "custom interval"
+interval="$(get_interval "$CONFIG_FILE")"
+assert_equals "reads interval 15" "15" "$interval"
+
+# ── Interval only (no label) ─────────────────────────────────────
+
+echo ""
+echo -e "${BOLD}Interval without label${RESET}"
+
+echo '{"interval": 30}' > "$CONFIG_FILE"
+test_start "interval without label"
+interval="$(get_interval "$CONFIG_FILE")"
+assert_equals "reads interval 30" "30" "$interval"
+
+# ── Missing interval falls back to default ────────────────────────
+
+echo ""
+echo -e "${BOLD}Missing interval in config${RESET}"
+
+echo '{"label": "Claude"}' > "$CONFIG_FILE"
+test_start "missing interval key"
+interval="$(get_interval "$CONFIG_FILE")"
+assert_equals "falls back to 5" "5" "$interval"
+
+# ── Both fields together ─────────────────────────────────────────
+
+echo ""
+echo -e "${BOLD}Both label and interval${RESET}"
+
+echo '{"label": "bot-ready", "interval": 10}' > "$CONFIG_FILE"
+test_start "both fields"
+label="$(get_label "$CONFIG_FILE")"
+interval="$(get_interval "$CONFIG_FILE")"
+assert_equals "label is bot-ready" "bot-ready" "$label"
+assert_equals "interval is 10" "10" "$interval"
+
+echo ""
+test_summary "Config (Label + Interval)"
