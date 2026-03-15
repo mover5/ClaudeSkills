@@ -223,8 +223,13 @@ This skill runs on Haiku to keep scanning costs low. Perform the triage directly
 4. Check if there is already an active issue being worked on. Check **both** `$RUNTIME_DIR/active-issue-auto.txt` and `$RUNTIME_DIR/active-issue-manual.txt`. If either exists, read it and check the PR:
    - Run `gh pr view <PR_NUMBER> --json state,reviews,comments` to check the PR.
    - **IMPORTANT: You MUST examine the `reviews` and `comments` arrays in the response.** Do not just check `state`. Look for comments or reviews authored by someone other than yourself that arrived after your last comment. Any such comment means there is feedback to address.
+   - **Also check for inline review comments** (comments left on specific lines of code). These are NOT included in the `reviews` or `comments` fields above. Fetch them separately:
+     ```
+     gh api repos/{owner}/{repo}/pulls/{pr}/comments --jq '[.[] | select(.user.login != "<YOUR_LOGIN>" and .user.type != "Bot")] | length'
+     ```
+     Replace `{owner}/{repo}` with the repo's owner/name (from `gh repo view --json owner,name --jq '.owner.login + "/" + .name'`) and `{pr}` with the PR number. If the count is greater than zero, there are inline review comments from reviewers that need to be addressed.
    - If the PR is **merged**: proceed to **After Merge** cleanup (see below). If it was `active-issue-auto.txt`, loop back to step 5 to check for the next issue. If it was `active-issue-manual.txt`, stop after cleanup.
-   - If the PR is **still open with unaddressed review comments or PR comments**: proceed to **Step 2** with action `ADDRESS_REVIEWS`. Pass the PR number, branch name, and the content of the comments to the subagent.
+   - If the PR is **still open with unaddressed review comments, PR comments, or inline review comments**: proceed to **Step 2** with action `ADDRESS_REVIEWS`. Pass the PR number, branch name, and the content of the comments (including inline comments) to the subagent.
    - If the PR is **still open with no new comments to address**: say "PR still open, no action needed." and **stop**. Do not pick up another issue.
 5. If no active issue (neither file exists), scan for the next issue to work on:
    ```
@@ -238,7 +243,7 @@ This skill runs on Haiku to keep scanning costs low. Perform the triage directly
 
 When triage identifies work that requires code changes (`SOLVE` or `ADDRESS_REVIEWS`), read the `model` field from `.claude/autopilot-config.json` (default: `opus`). Launch a subagent using the Agent tool with that model. This is the only phase that uses the more capable model.
 
-- **`ADDRESS_REVIEWS`** — Launch the subagent with a prompt to: check out the PR branch in a worktree, read the review comments, address them, commit, and push. Include the PR number, branch name, and a summary of the review feedback in the prompt. Then stop.
+- **`ADDRESS_REVIEWS`** — Launch the subagent with a prompt to: check out the PR branch in a worktree, read the review comments (including inline review comments from `gh api repos/{owner}/{repo}/pulls/{pr}/comments`), address them, commit, and push. Include the PR number, branch name, and a summary of the review feedback in the prompt. Then stop.
 - **`SOLVE`** — Launch the subagent with a prompt to work on the issue **inside a worktree**. Include the issue number, title, body, the default branch name, and `REPO_ID` in the prompt. The agent should:
    a. Create a worktree: `git worktree add /tmp/autopilot-worktree-${REPO_ID} -b issue-<NUMBER>-<short-description> $DEFAULT_BRANCH`
    b. All subsequent work (reading code, editing, building, testing) happens in the worktree
