@@ -57,19 +57,19 @@ assert_contains "outputs NO_WORK" "$output" "NO_WORK"
 echo ""
 echo -e "${BOLD}Active issue detection${RESET}"
 
-# Create a fake active-issue.txt in the runtime dir
+# Create a fake active-issue-auto.txt in the runtime dir
 REPO_ID=$(gh repo view --json url --jq '.url' | md5sum | cut -c1-12)
 RUNTIME_DIR="/tmp/autopilot-${REPO_ID}"
 mkdir -p "$RUNTIME_DIR"
 
 # Save and restore state
 HAD_ACTIVE_ISSUE=false
-if [ -f "$RUNTIME_DIR/active-issue.txt" ]; then
+if [ -f "$RUNTIME_DIR/active-issue-auto.txt" ]; then
   HAD_ACTIVE_ISSUE=true
-  cp "$RUNTIME_DIR/active-issue.txt" "$RUNTIME_DIR/active-issue.txt.bak"
+  cp "$RUNTIME_DIR/active-issue-auto.txt" "$RUNTIME_DIR/active-issue-auto.txt.bak"
 fi
 
-echo "99 200 issue-99-test" > "$RUNTIME_DIR/active-issue.txt"
+echo "99 200 issue-99-test" > "$RUNTIME_DIR/active-issue-auto.txt"
 
 test_start "exits zero when active issue exists"
 output="$(bash "$PRECHECK" 2>&1)" && exit_code=0 || exit_code=$?
@@ -78,9 +78,9 @@ assert_contains "outputs ACTIVE_ISSUE" "$output" "ACTIVE_ISSUE"
 
 # Restore
 if [ "$HAD_ACTIVE_ISSUE" = true ]; then
-  mv "$RUNTIME_DIR/active-issue.txt.bak" "$RUNTIME_DIR/active-issue.txt"
+  mv "$RUNTIME_DIR/active-issue-auto.txt.bak" "$RUNTIME_DIR/active-issue-auto.txt"
 else
-  rm -f "$RUNTIME_DIR/active-issue.txt"
+  rm -f "$RUNTIME_DIR/active-issue-auto.txt"
 fi
 
 echo ""

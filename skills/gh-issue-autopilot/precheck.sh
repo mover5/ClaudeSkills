@@ -13,9 +13,13 @@ set -euo pipefail
 REPO_ID=$(gh repo view --json url --jq '.url' | md5sum | cut -c1-12)
 RUNTIME_DIR="/tmp/autopilot-${REPO_ID}"
 
-# Check for active issue (PR monitoring needed)
-if [ -f "$RUNTIME_DIR/active-issue.txt" ]; then
-  echo "ACTIVE_ISSUE"
+# Check for active issues (PR monitoring needed)
+if [ -f "$RUNTIME_DIR/active-issue-auto.txt" ]; then
+  echo "ACTIVE_ISSUE:auto"
+  exit 0
+fi
+if [ -f "$RUNTIME_DIR/active-issue-manual.txt" ]; then
+  echo "ACTIVE_ISSUE:manual"
   exit 0
 fi
 

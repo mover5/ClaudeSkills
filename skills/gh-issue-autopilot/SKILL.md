@@ -63,8 +63,16 @@ mkdir -p "$RUNTIME_DIR"
 ```
 
 Runtime files inside `$RUNTIME_DIR`:
-- `active-issue.txt` — tracks the currently active issue (`ISSUE_NUMBER PR_NUMBER BRANCH_NAME [MANUAL]`)
+- `active-issue-auto.txt` — tracks the automatic mode's current issue (`ISSUE_NUMBER PR_NUMBER BRANCH_NAME`)
+- `active-issue-manual.txt` — tracks the manual mode's current issue (`ISSUE_NUMBER PR_NUMBER BRANCH_NAME`)
 - `cron-id.txt` — stores the CronCreate job ID
+
+### Cross-mode conflict prevention
+
+Before either mode starts work on an issue, it must check whether the other mode is already working on the same issue number:
+
+- **Manual mode**: Before starting, read `$RUNTIME_DIR/active-issue-auto.txt`. If it exists and contains the same issue number, **error out** and tell the user that automatic mode is already working on that issue.
+- **Automatic mode**: Before picking up an issue, read `$RUNTIME_DIR/active-issue-manual.txt`. If it exists and contains the same issue number, **skip that issue** and log that it's being handled manually.
 
 ### Detecting the default branch
 
@@ -187,7 +195,7 @@ This skill runs on Haiku to keep scanning costs low. Perform the triage directly
 1. Compute `REPO_ID` and `RUNTIME_DIR`.
 2. Detect the default branch: `DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name')`
 3. Read the label from `.claude/autopilot-config.json` (default: `Claude`).
-4. Check if there is already an active autopilot issue being worked on. Look for `$RUNTIME_DIR/active-issue.txt`. If it exists, read it:
+4. Check if there is already an active autopilot issue being worked on. Look for `$RUNTIME_DIR/active-issue-auto.txt`. If it exists, read it:
    - Run `gh pr view <PR_NUMBER> --json state,reviews,comments` to check the PR state.
    - If the PR is **merged**: proceed to **After Merge** cleanup (see below), then loop back to step 5 to check for the next issue.
    - If the PR is **still open with review comments that need addressing**: proceed to **Step 2** with action `ADDRESS_REVIEWS`.
@@ -197,7 +205,8 @@ This skill runs on Haiku to keep scanning costs low. Perform the triage directly
    gh issue list --label "<LABEL>" --state open --json number,title,body --limit 1
    ```
 6. If no issues found: say "No open issues with the <LABEL> label found." and **stop**.
-7. If an issue is found: proceed to **Step 2** with action `SOLVE`.
+7. **Cross-mode conflict check**: If an issue is found, check `$RUNTIME_DIR/active-issue-manual.txt`. If it exists and its issue number matches the found issue, **skip it** — say "Issue #N is being handled in manual mode, skipping." and **stop**. Do not pick up another issue.
+8. If an issue is found and no conflict: proceed to **Step 2** with action `SOLVE`.
 
 **Step 2 — Implementation (escalate to configured model):**
 
@@ -211,20 +220,20 @@ When triage identifies work that requires code changes (`SOLVE` or `ADDRESS_REVI
    d. Run the full test suite as documented in the project's CLAUDE.md
    e. Commit and push the branch (from the worktree)
    f. Create a PR targeting `$DEFAULT_BRANCH`, following the project's PR conventions (see CLAUDE.md)
-   g. Write the issue number, PR number, and branch name to `$RUNTIME_DIR/active-issue.txt` in the format: `ISSUE_NUMBER PR_NUMBER BRANCH_NAME`
+   g. Write the issue number, PR number, and branch name to `$RUNTIME_DIR/active-issue-auto.txt` in the format: `ISSUE_NUMBER PR_NUMBER BRANCH_NAME`
    h. Clean up the worktree: `git worktree remove /tmp/autopilot-worktree-${REPO_ID}`
    i. Tell the user what issue you picked up and link to the PR
 
 ### After Merge (cleanup)
 
-When a PR is confirmed merged:
-1. Read the branch name and mode from `$RUNTIME_DIR/active-issue.txt`
+When a PR is confirmed merged, determine which mode owns it by checking which active issue file exists (`active-issue-auto.txt` or `active-issue-manual.txt`):
+1. Read the branch name from the active issue file.
 2. Detect the default branch. If the repo is currently on the default branch, pull latest. If on another branch (manual work), skip the pull — don't disrupt manual work.
 3. Delete the local branch: `git branch -D <branch>`
 4. Delete the remote branch: `git push origin --delete <branch>` (ignore errors if already deleted)
-5. Remove `$RUNTIME_DIR/active-issue.txt`
-6. If the active issue file contained `MANUAL`: stop the cron job, remove `$RUNTIME_DIR/cron-id.txt`, tell the user the issue is fully resolved. Do NOT scan for more issues.
-7. Otherwise: tell the user the issue is complete and continue scanning for the next issue (go back to Scanning Step 1, triage).
+5. Remove the active issue file.
+6. If the file was `active-issue-manual.txt`: stop the cron job, remove `$RUNTIME_DIR/cron-id.txt`, tell the user the issue is fully resolved. Do NOT scan for more issues.
+7. If the file was `active-issue-auto.txt`: tell the user the issue is complete and continue scanning for the next issue (go back to Scanning Step 1, triage).
 
 ---
 
@@ -236,9 +245,10 @@ Interactive, single-issue mode. More collaborative during planning and implement
 
 1. Compute `REPO_ID` and `RUNTIME_DIR`.
 2. Detect the default branch: `DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name')`
-3. Fetch the issue: `gh issue view <NUMBER> --json number,title,body,labels`
-4. Pull the latest from the default branch: `git checkout $DEFAULT_BRANCH && git pull`
-5. Create and checkout a new branch: `git checkout -b issue-<NUMBER>-<short-description>`
+3. **Cross-mode conflict check**: Read `$RUNTIME_DIR/active-issue-auto.txt`. If it exists and its issue number matches `<NUMBER>`, **error out**: tell the user "Issue #N is already being worked on by automatic mode. Wait for it to finish or stop autopilot first." and **stop**. Do not proceed.
+4. Fetch the issue: `gh issue view <NUMBER> --json number,title,body,labels`
+5. Pull the latest from the default branch: `git checkout $DEFAULT_BRANCH && git pull`
+6. Create and checkout a new branch: `git checkout -b issue-<NUMBER>-<short-description>`
 
 ### Phase 2 & 3: Planning and Implementation (escalate to configured model)
 
@@ -262,7 +272,7 @@ Read the `model` field from `.claude/autopilot-config.json` (default: `opus`). L
 
 1. Commit and push the branch.
 2. Create a PR targeting `$DEFAULT_BRANCH`, following the project's PR conventions (see CLAUDE.md).
-3. Write the issue number and PR number to `$RUNTIME_DIR/active-issue.txt` in the format: `ISSUE_NUMBER PR_NUMBER BRANCH_NAME MANUAL`
+3. Write the issue number and PR number to `$RUNTIME_DIR/active-issue-manual.txt` in the format: `ISSUE_NUMBER PR_NUMBER BRANCH_NAME`
 4. Read the interval from `.claude/autopilot-config.json` (default: `5` minutes).
 5. Schedule a recurring cron job using the configured interval with the prompt: `/gh-issue-autopilot scan`
 6. Store the cron job ID by writing to `$RUNTIME_DIR/cron-id.txt`.
@@ -275,6 +285,7 @@ From this point, the scan loop handles PR review comments and post-merge cleanup
 ## Important Rules
 
 - **One issue at a time per mode.** Automatic mode and manual mode are independent, but each mode handles only one issue at a time.
+- **No duplicate work across modes.** Before starting work on an issue, always check the other mode's active issue file. Never allow both modes to work on the same issue number simultaneously.
 - **Automatic mode always uses a worktree.** Never modify files in the main repo from automatic mode.
 - **Never hardcode the default branch.** Always detect it with `gh repo view`.
 - **Full completion.** An issue is not done until its PR is merged and branches are cleaned up.
