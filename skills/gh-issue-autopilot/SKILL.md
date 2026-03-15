@@ -4,7 +4,7 @@ description: Solve GitHub Issues automatically or interactively. No args = autop
 model: haiku
 disable-model-invocation: true
 allowed-tools: Bash, Read, Edit, Write, Glob, Grep, Agent, Skill, CronCreate, CronDelete
-argument-hint: "[<issue-number> | stop | setup | label <name> | interval <minutes> | model <name>]"
+argument-hint: "[<issue-number> | stop | setup | label <name> | interval <minutes> | model <name> | hours <start>-<end>]"
 ---
 
 # GitHub Issue Autopilot
@@ -20,6 +20,7 @@ Solve GitHub Issues either automatically (loop mode in a worktree) or interactiv
 - `/gh-issue-autopilot label <name>` — Set the GitHub issue label used by automatic mode (default: `Claude`).
 - `/gh-issue-autopilot interval <minutes>` — Set the scan interval in minutes (default: `5`).
 - `/gh-issue-autopilot model <name>` — Set the model used for implementation subagents (default: `opus`). Accepts: `opus`, `sonnet`, or `haiku`.
+- `/gh-issue-autopilot hours <start>-<end>` — Set active hours for scanning (e.g., `9-17` for 9 AM to 5 PM). Use `hours off` to disable (scan anytime). Supports overnight ranges (e.g., `22-6`).
 
 ## Argument Routing
 
@@ -31,6 +32,7 @@ Parse the argument to determine the mode:
 - `label ...` → **Label config** (everything after `label ` is the label name)
 - `interval ...` → **Interval config** (everything after `interval ` is the number of minutes)
 - `model ...` → **Model config** (everything after `model ` is the model name)
+- `hours ...` → **Hours config** (everything after `hours ` is the range, e.g., `9-17` or `off`)
 - A number (e.g., `123`) → **Manual mode** for that issue number
 - Anything else → treat as automatic mode
 
@@ -48,9 +50,12 @@ Stored in the repo's `.claude/` directory. Persists across sessions.
 {
   "label": "Claude",
   "interval": 5,
-  "model": "opus"
+  "model": "opus",
+  "activeHours": { "start": 9, "end": 17 }
 }
 ```
+
+The `activeHours` field is optional. When omitted, scanning is always active.
 
 ### Runtime state (ephemeral, per-repo)
 
@@ -109,6 +114,25 @@ Controls which model is used for implementation subagents. The skill itself alwa
 4. Write the updated config back to `.claude/autopilot-config.json`.
 5. Tell the user the implementation model has been updated.
 
+### Active hours configuration (`/gh-issue-autopilot hours <start>-<end>`)
+
+Controls when scanning is active. Outside active hours, the pre-check script exits immediately without making any API calls or spending tokens. Uses the system's local time.
+
+1. Read the current config from `.claude/autopilot-config.json` (or start with defaults).
+2. If the argument is `off`, remove the `activeHours` field from the config (scanning becomes always active).
+3. Otherwise, parse the argument as `<start>-<end>` where both are integers 0-23.
+4. Validate that both start and end are integers in the range 0-23.
+5. Set the `activeHours` field to `{"start": <start>, "end": <end>}`.
+6. Write the updated config back to `.claude/autopilot-config.json`.
+7. Tell the user the active hours have been updated.
+8. Note: the change takes effect on the next scan cycle. No restart required.
+
+**Range behavior:**
+- Normal range (start < end): active from start up to (but not including) end. E.g., `9-17` means 9:00 AM through 4:59 PM.
+- Overnight range (start > end): active from start through midnight and from midnight up to end. E.g., `22-6` means 10:00 PM through 5:59 AM.
+- Same values (start == end): scanning is effectively disabled (zero-width window).
+- No `activeHours` in config: scanning is always active (default behavior).
+
 ---
 
 ## Setup (`/gh-issue-autopilot setup`)
@@ -129,6 +153,7 @@ Run these checks and report pass/fail for each:
 8. **Label exists in repo**: `gh label list --json name --jq '.[].name'` — check if the configured label exists (case-insensitive). If not, offer to create it.
 9. **Scan interval**: Read from `.claude/autopilot-config.json` or show default (`5` minutes)
 10. **Implementation model**: Read from `.claude/autopilot-config.json` or show default (`opus`). This is the model used for subagents that solve issues and address reviews. Explain that the skill runs on Haiku for triage and only escalates to this model for implementation. Ask the user if they'd like to change it (options: `opus`, `sonnet`, `haiku`).
+11. **Active hours**: Read from `.claude/autopilot-config.json`. If `activeHours` is set, show the configured range (e.g., `9-17`). If not set, show "always active (no restriction)". Ask the user if they'd like to configure active hours.
 
 ### Step 2: Check CLAUDE.md
 
@@ -185,7 +210,7 @@ Run the pre-check script as the very first action. This avoids burning tokens on
 ```bash
 bash "$(dirname "$(readlink -f ~/.claude/skills/gh-issue-autopilot/SKILL.md)")/precheck.sh"
 ```
-- If it exits **non-zero**: say "No work found." and **stop immediately**. Do not run any other commands.
+- If it exits **non-zero**: say "No work found." and **stop immediately**. Do not run any other commands. This also covers active hours — if the current time is outside configured active hours, the pre-check exits non-zero with `OUTSIDE_ACTIVE_HOURS`.
 - If it exits **zero**: proceed with the triage below.
 
 **Step 1 — Triage (runs on Haiku via the `model: haiku` frontmatter):**

@@ -4,10 +4,44 @@
 # Exit 0 = work to do (proceed with scan), exit 1 = no work (skip scan).
 #
 # Checks:
+# 0. If outside configured active hours → no work (skip before any API calls)
 # 1. If an active issue exists → work to do (need to check PR status)
 # 2. If open issues with the configured label exist → work to do
 # 3. Otherwise → no work
 set -euo pipefail
+
+# ── Active hours check (before any API calls) ──────────────────────
+# Uses CURRENT_HOUR env var if set (for testing), otherwise system local time.
+CONFIG_FILE=".claude/autopilot-config.json"
+if [ -f "$CONFIG_FILE" ]; then
+  AH_START=$(grep -o '"start"[[:space:]]*:[[:space:]]*[0-9]\+' "$CONFIG_FILE" 2>/dev/null \
+    | head -1 | sed 's/.*:[[:space:]]*//' || true)
+  AH_END=$(grep -o '"end"[[:space:]]*:[[:space:]]*[0-9]\+' "$CONFIG_FILE" 2>/dev/null \
+    | head -1 | sed 's/.*:[[:space:]]*//' || true)
+
+  # Only enforce if both start and end are present (activeHours is configured)
+  if [ -n "$AH_START" ] && [ -n "$AH_END" ]; then
+    HOUR="${CURRENT_HOUR:-$(date +%-H)}"
+
+    if [ "$AH_START" -eq "$AH_END" ]; then
+      # Zero-width window: always outside
+      echo "OUTSIDE_ACTIVE_HOURS"
+      exit 1
+    elif [ "$AH_START" -lt "$AH_END" ]; then
+      # Normal range (e.g., 9-17)
+      if [ "$HOUR" -lt "$AH_START" ] || [ "$HOUR" -ge "$AH_END" ]; then
+        echo "OUTSIDE_ACTIVE_HOURS"
+        exit 1
+      fi
+    else
+      # Overnight range (e.g., 22-6): active when hour >= start OR hour < end
+      if [ "$HOUR" -lt "$AH_START" ] && [ "$HOUR" -ge "$AH_END" ]; then
+        echo "OUTSIDE_ACTIVE_HOURS"
+        exit 1
+      fi
+    fi
+  fi
+fi
 
 # Compute runtime dir
 REPO_ID=$(gh repo view --json url --jq '.url' | md5sum | cut -c1-12)
@@ -23,8 +57,7 @@ if [ -f "$RUNTIME_DIR/active-issue-manual.txt" ]; then
   exit 0
 fi
 
-# Read label from config
-CONFIG_FILE=".claude/autopilot-config.json"
+# Read label from config (CONFIG_FILE already set above)
 LABEL="Claude"
 if [ -f "$CONFIG_FILE" ]; then
   PARSED=$(grep -o '"label"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null \
