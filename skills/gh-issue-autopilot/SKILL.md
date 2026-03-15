@@ -1,9 +1,10 @@
 ---
 name: gh-issue-autopilot
 description: Solve GitHub Issues automatically or interactively. No args = autopilot loop (worktree). Issue number = interactive mode. Also supports setup, label config, and stop.
+model: haiku
 disable-model-invocation: true
 allowed-tools: Bash, Read, Edit, Write, Glob, Grep, Agent, Skill, CronCreate, CronDelete
-argument-hint: "[<issue-number> | stop | setup | label <name> | interval <minutes>]"
+argument-hint: "[<issue-number> | stop | setup | label <name> | interval <minutes> | model <name>]"
 ---
 
 # GitHub Issue Autopilot
@@ -18,6 +19,7 @@ Solve GitHub Issues either automatically (loop mode in a worktree) or interactiv
 - `/gh-issue-autopilot setup` — Check prerequisites and help configure the repo for this skill.
 - `/gh-issue-autopilot label <name>` — Set the GitHub issue label used by automatic mode (default: `Claude`).
 - `/gh-issue-autopilot interval <minutes>` — Set the scan interval in minutes (default: `5`).
+- `/gh-issue-autopilot model <name>` — Set the model used for implementation subagents (default: `opus`). Accepts: `opus`, `sonnet`, or `haiku`.
 
 ## Argument Routing
 
@@ -28,6 +30,7 @@ Parse the argument to determine the mode:
 - `setup` → **Setup**
 - `label ...` → **Label config** (everything after `label ` is the label name)
 - `interval ...` → **Interval config** (everything after `interval ` is the number of minutes)
+- `model ...` → **Model config** (everything after `model ` is the model name)
 - A number (e.g., `123`) → **Manual mode** for that issue number
 - Anything else → treat as automatic mode
 
@@ -44,7 +47,8 @@ Stored in the repo's `.claude/` directory. Persists across sessions.
 ```json
 {
   "label": "Claude",
-  "interval": 5
+  "interval": 5,
+  "model": "opus"
 }
 ```
 
@@ -87,6 +91,16 @@ Cache the result in a shell variable for the duration of the operation.
 5. Tell the user the interval has been updated.
 6. Note: if autopilot is already running, the user must stop and restart it for the new interval to take effect.
 
+### Model configuration (`/gh-issue-autopilot model <name>`)
+
+Controls which model is used for implementation subagents. The skill itself always runs on Haiku for cheap triage/orchestration. Only the implementation phase (solving issues, addressing reviews) uses this model.
+
+1. Read the current config from `.claude/autopilot-config.json` (or start with defaults).
+2. Validate that the provided value is one of: `opus`, `sonnet`, `haiku`.
+3. Set the `model` field to the provided name.
+4. Write the updated config back to `.claude/autopilot-config.json`.
+5. Tell the user the implementation model has been updated.
+
 ---
 
 ## Setup (`/gh-issue-autopilot setup`)
@@ -106,6 +120,7 @@ Run these checks and report pass/fail for each:
 7. **Current label**: Read from `.claude/autopilot-config.json` or show default (`Claude`)
 8. **Label exists in repo**: `gh label list --json name --jq '.[].name'` — check if the configured label exists (case-insensitive). If not, offer to create it.
 9. **Scan interval**: Read from `.claude/autopilot-config.json` or show default (`5` minutes)
+10. **Implementation model**: Read from `.claude/autopilot-config.json` or show default (`opus`). This is the model used for subagents that solve issues and address reviews. Explain that the skill runs on Haiku for triage and only escalates to this model for implementation. Ask the user if they'd like to change it (options: `opus`, `sonnet`, `haiku`).
 
 ### Step 2: Check CLAUDE.md
 
@@ -163,26 +178,33 @@ Run the pre-check script as the very first action. This avoids burning tokens on
 bash "$(dirname "$(readlink -f ~/.claude/skills/gh-issue-autopilot/SKILL.md)")/precheck.sh"
 ```
 - If it exits **non-zero**: say "No work found." and **stop immediately**. Do not run any other commands.
-- If it exits **zero**: proceed with the full scan below.
+- If it exits **zero**: proceed with the triage below.
+
+**Step 1 — Triage (runs on Haiku via the `model: haiku` frontmatter):**
+
+This skill runs on Haiku to keep scanning costs low. Perform the triage directly — no subagent needed.
 
 1. Compute `REPO_ID` and `RUNTIME_DIR`.
 2. Detect the default branch: `DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name')`
 3. Read the label from `.claude/autopilot-config.json` (default: `Claude`).
-
 4. Check if there is already an active autopilot issue being worked on. Look for `$RUNTIME_DIR/active-issue.txt`. If it exists, read it:
-   - Run `gh pr view <PR_NUMBER> --json state` to check if the PR has been merged.
-   - If the PR is merged: clean up (see "After Merge" below), then continue scanning for the next issue.
-   - If the PR is still open: check the PR status and reviews. If there are review comments that need addressing, address them. Then stop — do not pick up another issue.
-   - If the PR is still open with no action needed: stop — do not pick up another issue. The next cron tick will check again.
-
+   - Run `gh pr view <PR_NUMBER> --json state,reviews,comments` to check the PR state.
+   - If the PR is **merged**: proceed to **After Merge** cleanup (see below), then loop back to step 5 to check for the next issue.
+   - If the PR is **still open with review comments that need addressing**: proceed to **Step 2** with action `ADDRESS_REVIEWS`.
+   - If the PR is **still open with no action needed**: say "PR still open, no action needed." and **stop**. Do not pick up another issue.
 5. If no active issue, scan for the next issue to work on:
    ```
    gh issue list --label "<LABEL>" --state open --json number,title,body --limit 1
    ```
+6. If no issues found: say "No open issues with the <LABEL> label found." and **stop**.
+7. If an issue is found: proceed to **Step 2** with action `SOLVE`.
 
-6. If no issues found, tell the user "No open issues with the <LABEL> label found." and stop.
+**Step 2 — Implementation (escalate to configured model):**
 
-7. If an issue is found, work on it **inside a worktree**:
+When triage identifies work that requires code changes (`SOLVE` or `ADDRESS_REVIEWS`), read the `model` field from `.claude/autopilot-config.json` (default: `opus`). Launch a subagent using the Agent tool with that model. This is the only phase that uses the more capable model.
+
+- **`ADDRESS_REVIEWS`** — Launch the subagent with a prompt to: check out the PR branch in a worktree, read the review comments, address them, commit, and push. Include the PR number, branch name, and a summary of the review feedback in the prompt. Then stop.
+- **`SOLVE`** — Launch the subagent with a prompt to work on the issue **inside a worktree**. Include the issue number, title, body, the default branch name, and `REPO_ID` in the prompt. The agent should:
    a. Create a worktree: `git worktree add /tmp/autopilot-worktree-${REPO_ID} -b issue-<NUMBER>-<short-description> $DEFAULT_BRANCH`
    b. All subsequent work (reading code, editing, building, testing) happens in the worktree
    c. Implement the fix (read code, understand the problem, write the solution, write tests)
@@ -202,7 +224,7 @@ When a PR is confirmed merged:
 4. Delete the remote branch: `git push origin --delete <branch>` (ignore errors if already deleted)
 5. Remove `$RUNTIME_DIR/active-issue.txt`
 6. If the active issue file contained `MANUAL`: stop the cron job, remove `$RUNTIME_DIR/cron-id.txt`, tell the user the issue is fully resolved. Do NOT scan for more issues.
-7. Otherwise: tell the user the issue is complete and continue scanning for the next issue (go back to step 5 of Scanning).
+7. Otherwise: tell the user the issue is complete and continue scanning for the next issue (go back to Scanning Step 1, triage).
 
 ---
 
@@ -218,7 +240,11 @@ Interactive, single-issue mode. More collaborative during planning and implement
 4. Pull the latest from the default branch: `git checkout $DEFAULT_BRANCH && git pull`
 5. Create and checkout a new branch: `git checkout -b issue-<NUMBER>-<short-description>`
 
-### Phase 2: Planning (interactive)
+### Phase 2 & 3: Planning and Implementation (escalate to configured model)
+
+Since this skill runs on Haiku for cost efficiency, the interactive planning and implementation phases require escalation to a more capable model. **Do not attempt planning or implementation on Haiku.**
+
+Read the `model` field from `.claude/autopilot-config.json` (default: `opus`). Launch a subagent using the Agent tool with that model. Pass it the issue details (number, title, body), the branch name, and instruct it to:
 
 1. Read and analyze the relevant code to understand the problem.
 2. **Present a plan to the user** — describe what you intend to change and why. Include:
@@ -226,14 +252,11 @@ Interactive, single-issue mode. More collaborative during planning and implement
    - The approach and any trade-offs
    - What tests you plan to add
 3. **Wait for the user to approve or adjust the plan** before writing any code.
-
-### Phase 3: Implementation (interactive)
-
-1. Implement the fix according to the approved plan.
-2. After each significant change, **briefly tell the user what you did** so they can course-correct.
-3. Run the full test suite as documented in the project's CLAUDE.md.
-4. If tests fail, fix them and re-run. Show the user what went wrong and how you fixed it.
-5. Once tests pass, **ask the user if they're ready to send the PR**, or if they want further changes.
+4. Implement the fix according to the approved plan.
+5. After each significant change, **briefly tell the user what you did** so they can course-correct.
+6. Run the full test suite as documented in the project's CLAUDE.md.
+7. If tests fail, fix them and re-run. Show the user what went wrong and how you fixed it.
+8. Once tests pass, **ask the user if they're ready to send the PR**, or if they want further changes.
 
 ### Phase 4: PR and Monitoring (automatic)
 
