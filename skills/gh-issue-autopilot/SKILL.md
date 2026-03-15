@@ -1,10 +1,10 @@
 ---
 name: gh-issue-autopilot
-description: Solve GitHub Issues automatically or interactively. No args = autopilot loop (worktree). Issue number = interactive mode. Also supports setup, label config, and stop.
+description: Solve GitHub Issues automatically or interactively. No args = autopilot loop (worktree). Issue number = interactive mode. Also supports setup, label config, issue conventions, and stop.
 model: haiku
 disable-model-invocation: true
 allowed-tools: Bash, Read, Edit, Write, Glob, Grep, Agent, Skill, CronCreate, CronDelete
-argument-hint: "[<issue-number> | stop | setup | label <name> | interval <minutes> | model <name> | hours <start>-<end>]"
+argument-hint: "[<issue-number> | stop | setup | label <name> | interval <minutes> | model <name> | hours <start>-<end> | issue-conventions]"
 ---
 
 # GitHub Issue Autopilot
@@ -21,6 +21,7 @@ Solve GitHub Issues either automatically (loop mode in a worktree) or interactiv
 - `/gh-issue-autopilot interval <minutes>` — Set the scan interval in minutes (default: `5`).
 - `/gh-issue-autopilot model <name>` — Set the model used for implementation subagents (default: `opus`). Accepts: `opus`, `sonnet`, or `haiku`.
 - `/gh-issue-autopilot hours <start>-<end>` — Set active hours for scanning (e.g., `9-17` for 9 AM to 5 PM). Use `hours off` to disable (scan anytime). Supports overnight ranges (e.g., `22-6`).
+- `/gh-issue-autopilot issue-conventions` — Interactively configure issue conventions (label-based scoping rules, title pattern rules). Guides the user through adding, viewing, and removing convention rules.
 
 ## Argument Routing
 
@@ -33,6 +34,7 @@ Parse the argument to determine the mode:
 - `interval ...` → **Interval config** (everything after `interval ` is the number of minutes)
 - `model ...` → **Model config** (everything after `model ` is the model name)
 - `hours ...` → **Hours config** (everything after `hours ` is the range, e.g., `9-17` or `off`)
+- `issue-conventions` → **Issue Conventions config** (interactive configuration of issue convention rules)
 - A number (e.g., `123`) → **Manual mode** for that issue number
 - Anything else → treat as automatic mode
 
@@ -51,11 +53,34 @@ Stored in the repo's `.claude/` directory. Persists across sessions.
   "label": "Claude",
   "interval": 5,
   "model": "opus",
-  "activeHours": { "start": 9, "end": 17 }
+  "activeHours": { "start": 9, "end": 17 },
+  "issueConventions": {
+    "labelRules": [
+      {
+        "label": "security",
+        "action": "extra-scrutiny",
+        "instructions": "Require thorough security review. Check for injection, auth bypass, and data exposure."
+      },
+      {
+        "label": "gh-issue-autopilot",
+        "action": "scope",
+        "instructions": "Scope all work to the skills/gh-issue-autopilot/ directory and its tests."
+      }
+    ],
+    "titleRules": [
+      {
+        "pattern": "^\\[URGENT\\]",
+        "action": "priority",
+        "instructions": "Treat as high priority. Solve before other labeled issues."
+      }
+    ]
+  }
 }
 ```
 
 The `activeHours` field is optional. When omitted, scanning is always active.
+
+The `issueConventions` field is optional. When omitted, no special convention rules are applied. See the **Issue Conventions** section below for details.
 
 ### Runtime state (ephemeral, per-repo)
 
@@ -133,6 +158,62 @@ Controls when scanning is active. Outside active hours, the pre-check script exi
 - Same values (start == end): scanning is effectively disabled (zero-width window).
 - No `activeHours` in config: scanning is always active (default behavior).
 
+### Issue Conventions configuration (`/gh-issue-autopilot issue-conventions`)
+
+Issue conventions let you define rules that change how the autopilot processes issues based on their labels or title patterns. This is useful for:
+- **Scoping work** to specific directories when an issue is tagged with a skill/component label
+- **Adding extra scrutiny** for issues labeled with `security`, `breaking-change`, etc.
+- **Prioritizing issues** whose titles match certain patterns (e.g., `[URGENT]`)
+- **Adding custom instructions** that get passed to the implementation subagent
+
+Convention rules are stored in `.claude/autopilot-config.json` under the `issueConventions` key.
+
+#### Rule types
+
+**Label rules** (`issueConventions.labelRules`): Triggered when an issue has a matching label (case-insensitive match).
+
+Each label rule has:
+- `label` (string, required): The GitHub label name to match.
+- `action` (string, required): One of `scope`, `extra-scrutiny`, `priority`, or `custom`.
+- `instructions` (string, required): Free-text instructions passed to the implementation subagent.
+
+**Title rules** (`issueConventions.titleRules`): Triggered when an issue's title matches a regex pattern.
+
+Each title rule has:
+- `pattern` (string, required): A regex pattern to match against the issue title.
+- `action` (string, required): One of `scope`, `extra-scrutiny`, `priority`, or `custom`.
+- `instructions` (string, required): Free-text instructions passed to the implementation subagent.
+
+#### Actions
+
+- **`scope`**: Restricts the implementation subagent's work to specific directories or files. The `instructions` field should describe the scope (e.g., "Scope all work to the skills/gh-issue-autopilot/ directory and its tests.").
+- **`extra-scrutiny`**: Adds extra review requirements. The `instructions` field describes what to scrutinize (e.g., "Require thorough security review. Check for injection, auth bypass, and data exposure.").
+- **`priority`**: Marks the issue as high priority. When multiple labeled issues exist, priority issues are solved first. The `instructions` field can add context.
+- **`custom`**: A catch-all for any other convention. The `instructions` are passed directly to the subagent.
+
+#### Applying conventions during scanning
+
+When triage picks up an issue (Step 1 of Scanning), before launching the implementation subagent:
+
+1. Read `issueConventions` from `.claude/autopilot-config.json`.
+2. Fetch the issue's labels: `gh issue view <NUMBER> --json labels --jq '.labels[].name'`
+3. For each label rule, check if the issue has a matching label (case-insensitive). Collect all matching rules.
+4. For each title rule, check if the issue title matches the regex pattern. Collect all matching rules.
+5. If any `priority` rules match and there are multiple candidate issues, prefer priority issues.
+6. Concatenate the `instructions` from all matching rules into an `## Issue Conventions` section and include it in the subagent prompt. This gives the subagent specific guidance for this issue.
+
+#### Interactive configuration
+
+When the user runs `/gh-issue-autopilot issue-conventions`, present the current conventions (if any) and offer these options:
+
+1. **View current rules** — Display all label rules and title rules in a readable format.
+2. **Add a label rule** — Ask for: label name, action (scope/extra-scrutiny/priority/custom), instructions.
+3. **Add a title rule** — Ask for: regex pattern, action, instructions.
+4. **Remove a rule** — List all rules with indices and ask which to remove.
+5. **Done** — Exit the configuration.
+
+After each add/remove, write the updated config back to `.claude/autopilot-config.json`.
+
 ---
 
 ## Setup (`/gh-issue-autopilot setup`)
@@ -154,6 +235,7 @@ Run these checks and report pass/fail for each:
 9. **Scan interval**: Read from `.claude/autopilot-config.json` or show default (`5` minutes)
 10. **Implementation model**: Read from `.claude/autopilot-config.json` or show default (`opus`). This is the model used for subagents that solve issues and address reviews. Explain that the skill runs on Haiku for triage and only escalates to this model for implementation. Ask the user if they'd like to change it (options: `opus`, `sonnet`, `haiku`).
 11. **Active hours**: Read from `.claude/autopilot-config.json`. If `activeHours` is set, show the configured range (e.g., `9-17`). If not set, show "always active (no restriction)". Ask the user if they'd like to configure active hours.
+12. **Issue conventions**: Read from `.claude/autopilot-config.json`. If `issueConventions` is set, show the number of label rules and title rules configured. If not set, show "no issue conventions configured". Offer to run `/gh-issue-autopilot issue-conventions` to configure them. Briefly explain that issue conventions let you add label-based scoping rules (e.g., tag issues with a skill label to restrict work to that skill's directory) and title-pattern rules (e.g., `[URGENT]` prefix for priority).
 
 ### Step 2: Check CLAUDE.md
 
@@ -162,6 +244,7 @@ Read the project's `CLAUDE.md` (if it exists) and check for sections that enhanc
 1. **Testing section** — Should document how to run the full test suite (command or script). Look for headings like `## Testing`, `## Running Tests`, `### Running All Tests`, or content containing `test` commands.
 2. **PR conventions** — Should document how PRs should be formatted (title style, body template). Look for headings like `## PR`, `## Pull Request`, or content mentioning PR format/template.
 3. **Git workflow** — Should document the main branch name and branching conventions. Look for headings like `## Git`, `## Workflow`, `## Branch`.
+4. **Issue conventions** — Should document how issues should be labeled, titled, or categorized for this project. Look for headings like `## Issue`, `## Issue Convention`, or content mentioning issue labels, issue templates, or issue triage. This section helps the autopilot understand project-specific issue handling rules.
 
 ### Step 3: Offer to help
 
@@ -170,8 +253,9 @@ For any missing CLAUDE.md sections, **offer to help the user write them**. If th
 - **Testing section**: Ask what commands run the test suite, then write a `## Testing` section with a `### Running All Tests` subsection containing the command(s).
 - **PR conventions**: Ask about their preferred PR title/body style, then write a `## Pull Requests` section.
 - **Git workflow**: Detect the default branch and write a `## Git Workflow` section documenting it.
+- **Issue conventions**: Ask how the user wants issues to be categorized (e.g., labels per skill/component, priority labels, special title prefixes). Then write a `## Issue Conventions` section documenting the rules. Also offer to configure matching `issueConventions` rules in `.claude/autopilot-config.json` so the autopilot enforces them automatically.
 
-If `CLAUDE.md` doesn't exist at all, offer to create one with all three sections.
+If `CLAUDE.md` doesn't exist at all, offer to create one with all sections.
 
 Always show the user what you plan to write and get approval before modifying CLAUDE.md.
 
@@ -238,8 +322,10 @@ This skill runs on Haiku to keep scanning costs low. Perform the triage directly
 
 When triage identifies work that requires code changes (`SOLVE` or `ADDRESS_REVIEWS`), read the `model` field from `.claude/autopilot-config.json` (default: `opus`). Launch a subagent using the Agent tool with that model. This is the only phase that uses the more capable model.
 
-- **`ADDRESS_REVIEWS`** — Launch the subagent with a prompt to: check out the PR branch in a worktree, read the review comments, address them, commit, and push. Include the PR number, branch name, and a summary of the review feedback in the prompt. Then stop.
-- **`SOLVE`** — Launch the subagent with a prompt to work on the issue **inside a worktree**. Include the issue number, title, body, the default branch name, and `REPO_ID` in the prompt. The agent should:
+**Before launching the subagent**, apply issue conventions (see "Applying conventions during scanning" in the Issue Conventions section above). If any convention rules match the issue, include the collected instructions in the subagent prompt under an `## Issue Conventions` heading. This ensures the subagent respects scoping rules, extra scrutiny requirements, and any other project-specific conventions.
+
+- **`ADDRESS_REVIEWS`** — Launch the subagent with a prompt to: check out the PR branch in a worktree, read the review comments, address them, commit, and push. Include the PR number, branch name, and a summary of the review feedback in the prompt. Also include any applicable issue convention instructions. Then stop.
+- **`SOLVE`** — Launch the subagent with a prompt to work on the issue **inside a worktree**. Include the issue number, title, body, the default branch name, `REPO_ID`, and any applicable issue convention instructions in the prompt. The agent should:
    a. Create a worktree: `git worktree add /tmp/autopilot-worktree-${REPO_ID} -b issue-<NUMBER>-<short-description> $DEFAULT_BRANCH`
    b. All subsequent work (reading code, editing, building, testing) happens in the worktree
    c. Implement the fix (read code, understand the problem, write the solution, write tests)
