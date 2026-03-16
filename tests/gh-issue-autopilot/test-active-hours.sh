@@ -159,8 +159,8 @@ if gh auth status >/dev/null 2>&1; then
 
   test_start "no activeHours does not block"
   output="$(cd "$REPO_ROOT" && CURRENT_HOUR=3 bash "$PRECHECK" 2>&1)" && exit_code=0 || exit_code=$?
-  # Should exit non-zero because no matching issues, but NOT because of hours
-  assert_equals "exits non-zero (no work)" "1" "$exit_code"
+  # Should exit zero with NO_WORK output (no matching issues, but NOT because of hours)
+  assert_equals "exits zero (no work)" "0" "$exit_code"
   assert_contains "output is NO_WORK (not hours)" "$output" "NO_WORK"
 
   # ── Normal range: inside active hours ─────────────────────────
@@ -172,7 +172,7 @@ if gh auth status >/dev/null 2>&1; then
 
   test_start "hour 12 inside 9-17"
   output="$(cd "$REPO_ROOT" && CURRENT_HOUR=12 bash "$PRECHECK" 2>&1)" && exit_code=0 || exit_code=$?
-  assert_equals "exits non-zero (no work, but not hours)" "1" "$exit_code"
+  assert_equals "exits zero (no work, but not hours)" "0" "$exit_code"
   assert_contains "output is NO_WORK" "$output" "NO_WORK"
 
   test_start "hour 9 inside 9-17 (boundary)"
@@ -186,7 +186,7 @@ if gh auth status >/dev/null 2>&1; then
 
   test_start "hour 5 outside 9-17"
   output="$(cd "$REPO_ROOT" && CURRENT_HOUR=5 bash "$PRECHECK" 2>&1)" && exit_code=0 || exit_code=$?
-  assert_equals "exits non-zero" "1" "$exit_code"
+  assert_equals "exits zero" "0" "$exit_code"
   assert_contains "output is OUTSIDE_ACTIVE_HOURS" "$output" "OUTSIDE_ACTIVE_HOURS"
 
   test_start "hour 17 outside 9-17 (boundary, end is exclusive)"

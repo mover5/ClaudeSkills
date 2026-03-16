@@ -53,7 +53,7 @@ if gh auth status >/dev/null 2>&1; then
   done
 
   # Run precheck from the repo root (no active issue, no matching issues)
-  test_start "exits non-zero when no work"
+  test_start "exits zero with NO_WORK when no work"
   output="$(cd "$REPO_ROOT" && bash "$PRECHECK" 2>&1)" && exit_code=0 || exit_code=$?
 
   # Restore active issue files
@@ -68,7 +68,7 @@ if gh auth status >/dev/null 2>&1; then
     rm -f "$CONFIG_FILE"
   fi
 
-  assert "exits non-zero" test "$exit_code" -ne 0
+  assert_equals "exits zero" "0" "$exit_code"
   assert_contains "outputs NO_WORK" "$output" "NO_WORK"
 
   # ── Active issue scenario ─────────────────────────────────────────
