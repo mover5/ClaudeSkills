@@ -3,7 +3,7 @@ name: gh-issue-autopilot
 description: Solve GitHub Issues automatically or interactively. No args = autopilot loop (worktree). Issue number = interactive mode. Also supports setup, label config, and stop.
 model: haiku
 disable-model-invocation: true
-allowed-tools: Bash, Read, Edit, Write, Glob, Grep, Agent, Skill, CronCreate, CronDelete
+allowed-tools: Bash, Read, Edit, Write, Glob, Grep, Agent, Skill, CronCreate, CronDelete, CronList
 argument-hint: "[<issue-number> | stop | setup | label <name> | interval <minutes> | model <name> | hours <start>-<end>]"
 ---
 
@@ -71,6 +71,7 @@ Runtime files inside `$RUNTIME_DIR`:
 - `active-issue-auto.txt` — tracks the automatic mode's current issue (`ISSUE_NUMBER PR_NUMBER BRANCH_NAME`)
 - `active-issue-manual.txt` — tracks the manual mode's current issue (`ISSUE_NUMBER PR_NUMBER BRANCH_NAME`)
 - `cron-id.txt` — stores the CronCreate job ID
+- `cron-created-at.txt` — stores the Unix timestamp when the current cron job was created (used for renewal)
 
 ### Cross-mode conflict prevention
 
@@ -195,13 +196,15 @@ Fully autonomous. Scans for issues, solves them, sends PRs, waits for merge, cle
 6. Run the scan logic below **immediately** (don't wait for the first cron tick).
 7. Schedule a recurring cron job using the configured interval with the prompt: `/gh-issue-autopilot scan`
 8. Store the cron job ID by writing to `$RUNTIME_DIR/cron-id.txt`.
+9. Record the creation time: `date +%s > $RUNTIME_DIR/cron-created-at.txt`
+10. Tell the user that autopilot will automatically renew its scanning schedule to run indefinitely (no 3-day limit).
 
 ### Stopping (`/gh-issue-autopilot stop`)
 
 1. Compute `REPO_ID` and `RUNTIME_DIR`.
 2. Read the cron job ID from `$RUNTIME_DIR/cron-id.txt`.
 3. Cancel it with CronDelete.
-4. Remove the file.
+4. Remove `$RUNTIME_DIR/cron-id.txt` and `$RUNTIME_DIR/cron-created-at.txt`.
 5. Tell the user autopilot has stopped.
 6. Do NOT do anything else.
 
@@ -213,7 +216,26 @@ Run the pre-check script as the very first action. This avoids burning tokens on
 bash "$(dirname "$(readlink -f ~/.claude/skills/gh-issue-autopilot/SKILL.md)")/precheck.sh"
 ```
 - If it exits **non-zero**: say "No work found." and **stop immediately**. Do not run any other commands. This also covers active hours — if the current time is outside configured active hours, the pre-check exits non-zero with `OUTSIDE_ACTIVE_HOURS`.
-- If it exits **zero**: proceed with the triage below.
+- If it exits **zero**: proceed with the cron renewal check and then triage below.
+
+**Step 0.5 — Cron Renewal (keeps autopilot running beyond 3 days):**
+
+CronCreate jobs auto-expire after 3 days. To support indefinite scanning, the scan must renew the cron job before it expires. Check on every scan invocation:
+
+1. Compute `REPO_ID` and `RUNTIME_DIR`.
+2. Read `$RUNTIME_DIR/cron-created-at.txt`. If the file doesn't exist, skip renewal (the cron was just created).
+3. Compare the stored timestamp to the current time: `CRON_AGE=$(( $(date +%s) - $(cat $RUNTIME_DIR/cron-created-at.txt) ))`
+4. If `CRON_AGE` is greater than **172800** seconds (2 days), the cron job is approaching expiry. Renew it:
+   a. Read the old cron job ID from `$RUNTIME_DIR/cron-id.txt`.
+   b. Delete the old cron job with CronDelete.
+   c. Read the interval from `.claude/autopilot-config.json` (default: `5` minutes).
+   d. Create a new cron job with CronCreate using the same interval and prompt: `/gh-issue-autopilot scan`
+   e. Write the new cron job ID to `$RUNTIME_DIR/cron-id.txt`.
+   f. Write the current timestamp to `$RUNTIME_DIR/cron-created-at.txt`: `date +%s > $RUNTIME_DIR/cron-created-at.txt`
+   g. Log: "Renewed cron job to extend scanning beyond the 3-day limit."
+5. If `CRON_AGE` is 2 days or less, do nothing — the cron is still fresh.
+
+This renewal happens transparently during normal scans. Since the default scan interval is 5 minutes, the cron will be renewed well before the 3-day expiry.
 
 **Step 1 — Triage (runs on Haiku via the `model: haiku` frontmatter):**
 
@@ -266,7 +288,7 @@ When a PR is confirmed merged, determine which mode owns it by checking which ac
 3. Delete the local branch: `git branch -D <branch>`
 4. Delete the remote branch: `git push origin --delete <branch>` (ignore errors if already deleted)
 5. Remove the active issue file.
-6. If the file was `active-issue-manual.txt`: stop the cron job, remove `$RUNTIME_DIR/cron-id.txt`, tell the user the issue is fully resolved. Do NOT scan for more issues.
+6. If the file was `active-issue-manual.txt`: stop the cron job, remove `$RUNTIME_DIR/cron-id.txt` and `$RUNTIME_DIR/cron-created-at.txt`, tell the user the issue is fully resolved. Do NOT scan for more issues.
 7. If the file was `active-issue-auto.txt`: tell the user the issue is complete and continue scanning for the next issue (go back to Scanning Step 1, triage).
 
 ---
@@ -311,7 +333,8 @@ Read the `model` field from `.claude/autopilot-config.json` (default: `opus`). L
 4. Read the interval from `.claude/autopilot-config.json` (default: `5` minutes).
 5. Schedule a recurring cron job using the configured interval with the prompt: `/gh-issue-autopilot scan`
 6. Store the cron job ID by writing to `$RUNTIME_DIR/cron-id.txt`.
-7. Tell the user the PR is created and monitoring has started.
+7. Record the creation time: `date +%s > $RUNTIME_DIR/cron-created-at.txt`
+8. Tell the user the PR is created and monitoring has started.
 
 From this point, the scan loop handles PR review comments and post-merge cleanup. Because the active issue file contains `MANUAL`, the scan loop will clean up and stop after this issue is done — it will NOT scan for more issues.
 
