@@ -240,5 +240,116 @@ assert_equals "age is 0 when no file" "0" "$age"
 result="$(check_renewal "$age")"
 assert_equals "does not need renewal when no file" "no" "$result"
 
+# ══════════════════════════════════════════════════════════════════
+# Session restart scenarios (stale cron state detection)
+# ══════════════════════════════════════════════════════════════════
+
+echo ""
+echo -e "${BOLD}── Session Restart Scenarios ──${RESET}"
+echo ""
+
+# Simulate: cron files left over from a previous session.
+# In a new session, CronList would return no matching ID.
+# The skill should detect the stale ID and clean up.
+
+# Helper: check if a cron ID is "valid" given a list of known IDs.
+# Simulates what CronList validation does.
+cron_id_is_valid() {
+  local stored_id="$1"
+  local known_ids="$2"  # space-separated list of valid IDs
+  for id in $known_ids; do
+    if [ "$stored_id" = "$id" ]; then
+      echo "valid"
+      return
+    fi
+  done
+  echo "stale"
+}
+
+# ── Stale cron ID from previous session ──────────────────────────
+
+echo -e "${BOLD}Stale cron ID from previous session${RESET}"
+
+echo "old_session_cron_123" > "$CRON_ID_FILE"
+echo "1700000000" > "$CRON_TS_FILE"
+
+# New session has different cron IDs (or none)
+CURRENT_SESSION_CRONS="new_session_cron_456 new_session_cron_789"
+
+test_start "detect stale cron ID from previous session"
+stored_id="$(cat "$CRON_ID_FILE")"
+result="$(cron_id_is_valid "$stored_id" "$CURRENT_SESSION_CRONS")"
+assert_equals "stale cron detected" "stale" "$result"
+
+# Simulate cleanup: when stale, remove both files
+if [ "$result" = "stale" ]; then
+  rm -f "$CRON_ID_FILE" "$CRON_TS_FILE"
+fi
+
+test_start "stale cron files cleaned up"
+assert_file_not_exists "cron-id.txt removed" "$CRON_ID_FILE"
+assert_file_not_exists "cron-created-at.txt removed" "$CRON_TS_FILE"
+
+# ── Valid cron ID in same session ────────────────────────────────
+
+echo ""
+echo -e "${BOLD}Valid cron ID in current session${RESET}"
+
+echo "new_session_cron_456" > "$CRON_ID_FILE"
+echo "$(date +%s)" > "$CRON_TS_FILE"
+
+test_start "detect valid cron ID in current session"
+stored_id="$(cat "$CRON_ID_FILE")"
+result="$(cron_id_is_valid "$stored_id" "$CURRENT_SESSION_CRONS")"
+assert_equals "cron is valid" "valid" "$result"
+
+test_start "valid cron files preserved"
+assert_file_exists "cron-id.txt kept" "$CRON_ID_FILE"
+assert_file_exists "cron-created-at.txt kept" "$CRON_TS_FILE"
+
+# ── Empty session (no cron jobs at all) ──────────────────────────
+
+echo ""
+echo -e "${BOLD}Stale ID with empty session (no crons running)${RESET}"
+
+echo "leftover_cron_999" > "$CRON_ID_FILE"
+echo "1700000000" > "$CRON_TS_FILE"
+
+EMPTY_SESSION_CRONS=""
+
+test_start "detect stale cron ID with no active crons"
+stored_id="$(cat "$CRON_ID_FILE")"
+result="$(cron_id_is_valid "$stored_id" "$EMPTY_SESSION_CRONS")"
+assert_equals "stale cron detected" "stale" "$result"
+
+# Cleanup
+rm -f "$CRON_ID_FILE" "$CRON_TS_FILE"
+
+test_start "stale files cleaned up (empty session)"
+assert_file_not_exists "cron-id.txt removed" "$CRON_ID_FILE"
+assert_file_not_exists "cron-created-at.txt removed" "$CRON_TS_FILE"
+
+# ── No cron files at all (fresh start) ──────────────────────────
+
+echo ""
+echo -e "${BOLD}Fresh start with no cron state files${RESET}"
+
+rm -f "$CRON_ID_FILE" "$CRON_TS_FILE"
+
+test_start "no cron files is a clean state"
+assert_file_not_exists "no cron-id.txt" "$CRON_ID_FILE"
+assert_file_not_exists "no cron-created-at.txt" "$CRON_TS_FILE"
+
+# After fresh start, new cron is created and files are written
+echo "fresh_cron_001" > "$CRON_ID_FILE"
+echo "$(date +%s)" > "$CRON_TS_FILE"
+
+test_start "new cron files created after fresh start"
+assert_file_exists "cron-id.txt created" "$CRON_ID_FILE"
+assert_file_exists "cron-created-at.txt created" "$CRON_TS_FILE"
+
+# Final cleanup
+rm -f "$CRON_ID_FILE" "$CRON_TS_FILE"
+
 echo ""
 test_summary "Cron Renewal"
