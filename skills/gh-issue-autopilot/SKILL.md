@@ -162,6 +162,7 @@ Read the project's `CLAUDE.md` (if it exists) and check for sections that enhanc
 1. **Testing section** — Should document how to run the full test suite (command or script). Look for headings like `## Testing`, `## Running Tests`, `### Running All Tests`, or content containing `test` commands.
 2. **PR conventions** — Should document how PRs should be formatted (title style, body template). Look for headings like `## PR`, `## Pull Request`, or content mentioning PR format/template.
 3. **Git workflow** — Should document the main branch name and branching conventions. Look for headings like `## Git`, `## Workflow`, `## Branch`.
+4. **Issue conventions** — Optional. Should document custom rules for processing issues (e.g., label meanings, title conventions, scoping rules, extra scrutiny for certain labels). Look for headings like `## Issue Conventions`, `## Issue`, or content mentioning issue processing rules. This section is pseudo-free form: each repo can specify its own instructions for how to interpret and handle issues.
 
 ### Step 3: Offer to help
 
@@ -170,6 +171,7 @@ For any missing CLAUDE.md sections, **offer to help the user write them**. If th
 - **Testing section**: Ask what commands run the test suite, then write a `## Testing` section with a `### Running All Tests` subsection containing the command(s).
 - **PR conventions**: Ask about their preferred PR title/body style, then write a `## Pull Requests` section.
 - **Git workflow**: Detect the default branch and write a `## Git Workflow` section documenting it.
+- **Issue conventions**: Ask the user how they want issues to be processed — for example, whether certain labels indicate skill-scoped work, whether specific title patterns carry meaning, or whether some labels should trigger extra scrutiny or specific processes. Write a `## Issue Conventions` section with their instructions.
 
 If `CLAUDE.md` doesn't exist at all, offer to create one with all three sections.
 
@@ -234,7 +236,7 @@ This skill runs on Haiku to keep scanning costs low. Perform the triage directly
    - If the PR is **still open with no new comments to address**: say "PR still open, no action needed." and **stop**. Do not pick up another issue.
 5. If no active issue (neither file exists), scan for the next issue to work on:
    ```
-   gh issue list --label "<LABEL>" --state open --json number,title,body --limit 1
+   gh issue list --label "<LABEL>" --state open --json number,title,body,labels --limit 1
    ```
 6. If no issues found: say "No open issues with the <LABEL> label found." and **stop**.
 7. **Cross-mode conflict check**: If an issue is found, check `$RUNTIME_DIR/active-issue-manual.txt`. If it exists and its issue number matches the found issue, **skip it** — say "Issue #N is being handled in manual mode, skipping." and **stop**. Do not pick up another issue.
@@ -245,7 +247,7 @@ This skill runs on Haiku to keep scanning costs low. Perform the triage directly
 When triage identifies work that requires code changes (`SOLVE` or `ADDRESS_REVIEWS`), read the `model` field from `.claude/autopilot-config.json` (default: `opus`). Launch a subagent using the Agent tool with that model. This is the only phase that uses the more capable model.
 
 - **`ADDRESS_REVIEWS`** — Launch the subagent with a prompt to: check out the PR branch in a worktree, read the review comments, address them, commit, and push. Include the PR number, branch name, and a summary of the review feedback in the prompt. Then stop.
-- **`SOLVE`** — First, fetch all issue comments: `gh issue view <NUMBER> --json number,title,body,comments`. Launch the subagent with a prompt to work on the issue **inside a worktree**. Include the issue number, title, body, **all issue comments**, the default branch name, and `REPO_ID` in the prompt. The agent should:
+- **`SOLVE`** — First, fetch all issue comments: `gh issue view <NUMBER> --json number,title,body,labels,comments`. Also read the project's `CLAUDE.md` and check for an `## Issue Conventions` section. If present, include those conventions in the subagent prompt so the agent can apply any repo-specific rules (e.g., label-based scoping, title conventions, extra scrutiny). Launch the subagent with a prompt to work on the issue **inside a worktree**. Include the issue number, title, body, labels, **all issue comments**, any issue conventions from CLAUDE.md, the default branch name, and `REPO_ID` in the prompt. The agent should:
    a. Create a worktree: `git worktree add /tmp/autopilot-worktree-${REPO_ID} -b issue-<NUMBER>-<short-description> $DEFAULT_BRANCH`
    b. All subsequent work (reading code, editing, building, testing) happens in the worktree
    c. Implement the fix (read code, understand the problem, write the solution, write tests)
@@ -279,14 +281,15 @@ Interactive, single-issue mode. More collaborative during planning and implement
 2. Detect the default branch: `DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name')`
 3. **Cross-mode conflict check**: Read `$RUNTIME_DIR/active-issue-auto.txt`. If it exists and its issue number matches `<NUMBER>`, **error out**: tell the user "Issue #N is already being worked on by automatic mode. Wait for it to finish or stop autopilot first." and **stop**. Do not proceed.
 4. Fetch the issue (including all comments): `gh issue view <NUMBER> --json number,title,body,labels,comments`
-5. Pull the latest from the default branch: `git checkout $DEFAULT_BRANCH && git pull`
-6. Create and checkout a new branch: `git checkout -b issue-<NUMBER>-<short-description>`
+5. Read the project's `CLAUDE.md` and check for an `## Issue Conventions` section. If present, these conventions must be passed to the implementation subagent and applied when processing the issue (e.g., label-based scoping, title conventions, extra scrutiny rules).
+6. Pull the latest from the default branch: `git checkout $DEFAULT_BRANCH && git pull`
+7. Create and checkout a new branch: `git checkout -b issue-<NUMBER>-<short-description>`
 
 ### Phase 2 & 3: Planning and Implementation (escalate to configured model)
 
 Since this skill runs on Haiku for cost efficiency, the interactive planning and implementation phases require escalation to a more capable model. **Do not attempt planning or implementation on Haiku.**
 
-Read the `model` field from `.claude/autopilot-config.json` (default: `opus`). Launch a subagent using the Agent tool with that model. Pass it the issue details (number, title, body, **and all issue comments**), the branch name, and instruct it to:
+Read the `model` field from `.claude/autopilot-config.json` (default: `opus`). Launch a subagent using the Agent tool with that model. Pass it the issue details (number, title, body, labels, **all issue comments**), any issue conventions from CLAUDE.md, the branch name, and instruct it to:
 
 1. Read and analyze the relevant code to understand the problem.
 2. **Present a plan to the user** — describe what you intend to change and why. Include:
@@ -323,6 +326,7 @@ From this point, the scan loop handles PR review comments and post-merge cleanup
 - **Full completion.** An issue is not done until its PR is merged and branches are cleaned up.
 - **Test everything.** Always run the full test suite before committing.
 - **Follow project conventions.** Use the patterns from CLAUDE.md and the context/ docs for implementation.
+- **Apply issue conventions.** If the project's CLAUDE.md contains an `## Issue Conventions` section, follow those rules when processing issues. This may include label-based scoping, title-based routing, or extra scrutiny for certain issue types.
 - **PR screenshots.** If the change involves UX, follow the PR screenshot workflow from the project's CLAUDE.md (if documented).
 - **Be thorough.** Read relevant code before making changes. Write tests for new features.
 - **Handle PR feedback.** If the PR has review comments, address them before moving on.
