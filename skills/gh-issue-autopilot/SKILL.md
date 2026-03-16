@@ -283,15 +283,16 @@ When triage identifies work that requires code changes (`SOLVE` or `ADDRESS_REVI
 
 - **`ADDRESS_REVIEWS`** — Launch the subagent with a prompt to: check out the PR branch in a worktree, read the review comments, address them, commit, and push. Include the PR number, branch name, and a summary of the review feedback in the prompt. Then stop.
 - **`SOLVE`** — First, fetch all issue comments: `gh issue view <NUMBER> --json number,title,body,labels,comments`. Also read the project's `CLAUDE.md` and check for an `## Issue Conventions` section. If present, include those conventions in the subagent prompt so the agent can apply any repo-specific rules (e.g., label-based scoping, title conventions, extra scrutiny). Launch the subagent with a prompt to work on the issue **inside a worktree**. Include the issue number, title, body, labels, **all issue comments**, any issue conventions from CLAUDE.md, the default branch name, and `REPO_ID` in the prompt. The agent should:
-   a. Create a worktree: `git worktree add /tmp/autopilot-worktree-${REPO_ID} -b issue-<NUMBER>-<short-description> $DEFAULT_BRANCH`
-   b. All subsequent work (reading code, editing, building, testing) happens in the worktree
-   c. Implement the fix (read code, understand the problem, write the solution, write tests)
-   d. Run the full test suite as documented in the project's CLAUDE.md
-   e. Commit and push the branch (from the worktree)
-   f. Create a PR targeting `$DEFAULT_BRANCH`, following the project's PR conventions (see CLAUDE.md)
-   g. Write the issue number, PR number, and branch name to `$RUNTIME_DIR/active-issue-auto.txt` in the format: `ISSUE_NUMBER PR_NUMBER BRANCH_NAME`
-   h. Clean up the worktree: `git worktree remove /tmp/autopilot-worktree-${REPO_ID}`
-   i. Tell the user what issue you picked up and link to the PR
+   a. **Update the default branch to latest before creating the worktree** (prevents merge conflicts from working on stale code): `git fetch origin $DEFAULT_BRANCH && git branch -f $DEFAULT_BRANCH origin/$DEFAULT_BRANCH`
+   b. Create a worktree: `git worktree add /tmp/autopilot-worktree-${REPO_ID} -b issue-<NUMBER>-<short-description> $DEFAULT_BRANCH`
+   c. All subsequent work (reading code, editing, building, testing) happens in the worktree
+   d. Implement the fix (read code, understand the problem, write the solution, write tests)
+   e. Run the full test suite as documented in the project's CLAUDE.md
+   f. Commit and push the branch (from the worktree)
+   g. Create a PR targeting `$DEFAULT_BRANCH`, following the project's PR conventions (see CLAUDE.md)
+   h. Write the issue number, PR number, and branch name to `$RUNTIME_DIR/active-issue-auto.txt` in the format: `ISSUE_NUMBER PR_NUMBER BRANCH_NAME`
+   i. Clean up the worktree: `git worktree remove /tmp/autopilot-worktree-${REPO_ID}`
+   j. Tell the user what issue you picked up and link to the PR
 
 ### After Merge (cleanup)
 
