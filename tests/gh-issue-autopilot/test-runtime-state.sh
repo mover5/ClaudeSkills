@@ -119,9 +119,13 @@ echo ""
 echo -e "${BOLD}Cron ID tracking${RESET}"
 
 CRON_FILE="$RUNTIME_DIR/cron-id.txt"
+CRON_TS_FILE="$RUNTIME_DIR/cron-created-at.txt"
 
 test_start "no cron ID initially"
 assert "cron file does not exist" test ! -f "$CRON_FILE"
+
+test_start "no cron timestamp initially"
+assert "cron timestamp file does not exist" test ! -f "$CRON_TS_FILE"
 
 echo "cron_abc123" > "$CRON_FILE"
 test_start "cron ID written"
@@ -129,9 +133,16 @@ assert "cron file exists" test -f "$CRON_FILE"
 cron_id="$(cat "$CRON_FILE")"
 assert_equals "cron ID matches" "cron_abc123" "$cron_id"
 
-rm -f "$CRON_FILE"
-test_start "cron ID removed"
-assert "cron file removed" test ! -f "$CRON_FILE"
+echo "1710000000" > "$CRON_TS_FILE"
+test_start "cron timestamp written"
+assert "cron timestamp file exists" test -f "$CRON_TS_FILE"
+cron_ts="$(cat "$CRON_TS_FILE")"
+assert_equals "cron timestamp matches" "1710000000" "$cron_ts"
+
+rm -f "$CRON_FILE" "$CRON_TS_FILE"
+test_start "cron files removed"
+assert "cron ID file removed" test ! -f "$CRON_FILE"
+assert "cron timestamp file removed" test ! -f "$CRON_TS_FILE"
 
 echo ""
 test_summary "Runtime State Management"
