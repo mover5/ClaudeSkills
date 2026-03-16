@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # Pre-check for gh-issue-autopilot scan.
 # Runs before the full scan to avoid unnecessary Claude token usage.
-# Exit 0 = work to do (proceed with scan), exit 1 = no work (skip scan).
+# Always exits 0 on success. The output string indicates the result:
+#   OUTSIDE_ACTIVE_HOURS — skip scan (outside configured hours)
+#   ACTIVE_ISSUE:<mode>  — work to do (PR monitoring needed)
+#   ISSUES_FOUND:<count> — work to do (new issues to pick up)
+#   NO_WORK              — skip scan (nothing to do)
+# A non-zero exit indicates an unexpected error (e.g., gh CLI failure).
 #
 # Checks:
 # 0. If outside configured active hours → no work (skip before any API calls)
@@ -26,18 +31,18 @@ if [ -f "$CONFIG_FILE" ]; then
     if [ "$AH_START" -eq "$AH_END" ]; then
       # Zero-width window: always outside
       echo "OUTSIDE_ACTIVE_HOURS"
-      exit 1
+      exit 0
     elif [ "$AH_START" -lt "$AH_END" ]; then
       # Normal range (e.g., 9-17)
       if [ "$HOUR" -lt "$AH_START" ] || [ "$HOUR" -ge "$AH_END" ]; then
         echo "OUTSIDE_ACTIVE_HOURS"
-        exit 1
+        exit 0
       fi
     else
       # Overnight range (e.g., 22-6): active when hour >= start OR hour < end
       if [ "$HOUR" -lt "$AH_START" ] && [ "$HOUR" -ge "$AH_END" ]; then
         echo "OUTSIDE_ACTIVE_HOURS"
-        exit 1
+        exit 0
       fi
     fi
   fi
@@ -76,4 +81,4 @@ if [ "$COUNT" -gt 0 ]; then
 fi
 
 echo "NO_WORK"
-exit 1
+exit 0

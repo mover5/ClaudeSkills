@@ -216,8 +216,10 @@ Run the pre-check script as the very first action. This avoids burning tokens on
 ```bash
 bash "$(dirname "$(readlink -f ~/.claude/skills/gh-issue-autopilot/SKILL.md)")/precheck.sh"
 ```
-- If it exits **non-zero**: say "No work found." and **stop immediately**. Do not run any other commands. This also covers active hours — if the current time is outside configured active hours, the pre-check exits non-zero with `OUTSIDE_ACTIVE_HOURS`.
-- If it exits **zero**: proceed with the cron renewal check and then triage below.
+- If it exits **non-zero**: an unexpected error occurred. Log the error and **stop immediately**.
+- If it exits **zero**, check the output string:
+  - `NO_WORK` or `OUTSIDE_ACTIVE_HOURS`: say "No work found." and **stop immediately**. Do not run any other commands.
+  - `ACTIVE_ISSUE:*` or `ISSUES_FOUND:*`: proceed with the cron renewal check and then triage below.
 
 **Step 0.5 — Cron Validation & Renewal (keeps autopilot running beyond 3 days):**
 
