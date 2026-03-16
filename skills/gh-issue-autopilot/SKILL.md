@@ -221,10 +221,16 @@ This skill runs on Haiku to keep scanning costs low. Perform the triage directly
 2. Detect the default branch: `DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name')`
 3. Read the label from `.claude/autopilot-config.json` (default: `Claude`).
 4. Check if there is already an active issue being worked on. Check **both** `$RUNTIME_DIR/active-issue-auto.txt` and `$RUNTIME_DIR/active-issue-manual.txt`. If either exists, read it and check the PR:
-   - Run `gh pr view <PR_NUMBER> --json state,reviews,comments` to check the PR.
+   - Run `gh pr view <PR_NUMBER> --json state,mergedAt,reviews,comments` to check the PR.
    - **IMPORTANT: You MUST examine the `reviews` and `comments` arrays in the response.** Do not just check `state`. Look for comments or reviews authored by someone other than yourself that arrived after your last comment. Any such comment means there is feedback to address.
-   - If the PR is **merged**: proceed to **After Merge** cleanup (see below). If it was `active-issue-auto.txt`, loop back to step 5 to check for the next issue. If it was `active-issue-manual.txt`, stop after cleanup.
-   - If the PR is **still open with unaddressed review comments or PR comments**: proceed to **Step 2** with action `ADDRESS_REVIEWS`. Pass the PR number, branch name, and the content of the comments to the subagent.
+   - **Also fetch inline review comments** (comments left on specific code lines), which are NOT included in the `gh pr view` response. Fetch them separately:
+     ```bash
+     gh api repos/{owner}/{repo}/pulls/{pr_number}/comments
+     ```
+     If any inline comments are authored by someone other than the bot, treat them as unaddressed feedback just like regular review comments.
+   - If the PR state is CLOSED/MERGED **and** `mergedAt` is **not null**: the PR was merged. Proceed to **After Merge** cleanup (see below). If it was `active-issue-auto.txt`, loop back to step 5 to check for the next issue. If it was `active-issue-manual.txt`, stop after cleanup.
+   - If the PR state is CLOSED/MERGED **and** `mergedAt` is **null**: the PR was closed without merging. Report "PR #N was closed without merging." Remove the active issue file (since there is nothing more to do), but do **NOT** delete branches or run merge cleanup. If it was `active-issue-auto.txt`, loop back to step 5 to check for the next issue. If it was `active-issue-manual.txt`, stop.
+   - If the PR is **still open with unaddressed review comments, PR comments, or inline review comments**: proceed to **Step 2** with action `ADDRESS_REVIEWS`. Pass the PR number, branch name, and the content of all comments (including inline) to the subagent.
    - If the PR is **still open with no new comments to address**: say "PR still open, no action needed." and **stop**. Do not pick up another issue.
 5. If no active issue (neither file exists), scan for the next issue to work on:
    ```
@@ -239,7 +245,7 @@ This skill runs on Haiku to keep scanning costs low. Perform the triage directly
 When triage identifies work that requires code changes (`SOLVE` or `ADDRESS_REVIEWS`), read the `model` field from `.claude/autopilot-config.json` (default: `opus`). Launch a subagent using the Agent tool with that model. This is the only phase that uses the more capable model.
 
 - **`ADDRESS_REVIEWS`** — Launch the subagent with a prompt to: check out the PR branch in a worktree, read the review comments, address them, commit, and push. Include the PR number, branch name, and a summary of the review feedback in the prompt. Then stop.
-- **`SOLVE`** — Launch the subagent with a prompt to work on the issue **inside a worktree**. Include the issue number, title, body, the default branch name, and `REPO_ID` in the prompt. The agent should:
+- **`SOLVE`** — First, fetch all issue comments: `gh issue view <NUMBER> --json number,title,body,comments`. Launch the subagent with a prompt to work on the issue **inside a worktree**. Include the issue number, title, body, **all issue comments**, the default branch name, and `REPO_ID` in the prompt. The agent should:
    a. Create a worktree: `git worktree add /tmp/autopilot-worktree-${REPO_ID} -b issue-<NUMBER>-<short-description> $DEFAULT_BRANCH`
    b. All subsequent work (reading code, editing, building, testing) happens in the worktree
    c. Implement the fix (read code, understand the problem, write the solution, write tests)
@@ -272,7 +278,7 @@ Interactive, single-issue mode. More collaborative during planning and implement
 1. Compute `REPO_ID` and `RUNTIME_DIR`.
 2. Detect the default branch: `DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name')`
 3. **Cross-mode conflict check**: Read `$RUNTIME_DIR/active-issue-auto.txt`. If it exists and its issue number matches `<NUMBER>`, **error out**: tell the user "Issue #N is already being worked on by automatic mode. Wait for it to finish or stop autopilot first." and **stop**. Do not proceed.
-4. Fetch the issue: `gh issue view <NUMBER> --json number,title,body,labels`
+4. Fetch the issue (including all comments): `gh issue view <NUMBER> --json number,title,body,labels,comments`
 5. Pull the latest from the default branch: `git checkout $DEFAULT_BRANCH && git pull`
 6. Create and checkout a new branch: `git checkout -b issue-<NUMBER>-<short-description>`
 
@@ -280,7 +286,7 @@ Interactive, single-issue mode. More collaborative during planning and implement
 
 Since this skill runs on Haiku for cost efficiency, the interactive planning and implementation phases require escalation to a more capable model. **Do not attempt planning or implementation on Haiku.**
 
-Read the `model` field from `.claude/autopilot-config.json` (default: `opus`). Launch a subagent using the Agent tool with that model. Pass it the issue details (number, title, body), the branch name, and instruct it to:
+Read the `model` field from `.claude/autopilot-config.json` (default: `opus`). Launch a subagent using the Agent tool with that model. Pass it the issue details (number, title, body, **and all issue comments**), the branch name, and instruct it to:
 
 1. Read and analyze the relevant code to understand the problem.
 2. **Present a plan to the user** — describe what you intend to change and why. Include:
@@ -320,3 +326,4 @@ From this point, the scan loop handles PR review comments and post-merge cleanup
 - **PR screenshots.** If the change involves UX, follow the PR screenshot workflow from the project's CLAUDE.md (if documented).
 - **Be thorough.** Read relevant code before making changes. Write tests for new features.
 - **Handle PR feedback.** If the PR has review comments, address them before moving on.
+- **Never close or delete a PR.** Subagents may create PRs, push commits, and leave comments, but closing or deleting a PR is reserved for human reviewers only.
