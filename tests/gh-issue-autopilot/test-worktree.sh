@@ -50,6 +50,45 @@ test_start "main repo still on main branch"
 main_branch="$(git -C "$TEMP_REPO" branch --show-current)"
 assert_equals "main repo on main" "main" "$main_branch"
 
+# ── Working directory inside worktree ─────────────────────────────
+
+echo ""
+echo -e "${BOLD}Worktree working directory (cd into worktree)${RESET}"
+
+# Recreate worktree for cd tests (previous one is still active)
+test_start "git commands from worktree cwd use worktree branch"
+cwd_branch="$(cd "$WORKTREE_DIR" && git branch --show-current)"
+assert_equals "cwd shows worktree branch" "issue-1-test" "$cwd_branch"
+
+test_start "git commands from main repo cwd use main branch"
+main_cwd_branch="$(cd "$TEMP_REPO" && git branch --show-current)"
+assert_equals "cwd shows main branch" "main" "$main_cwd_branch"
+
+test_start "commits from worktree cwd go to worktree branch"
+(cd "$WORKTREE_DIR" && echo "cwd-test" > cwd-file.txt && git add . && git commit -m "cwd commit" --quiet)
+assert "cwd file exists in worktree" test -f "$WORKTREE_DIR/cwd-file.txt"
+assert "cwd file not in main repo" test ! -f "$TEMP_REPO/cwd-file.txt"
+
+test_start "returning to main repo dir after worktree work"
+result_branch="$(cd "$WORKTREE_DIR" && echo "in worktree" > /dev/null && cd "$TEMP_REPO" && git branch --show-current)"
+assert_equals "back in main repo branch" "main" "$result_branch"
+
+# ── SKILL.md documents cd into worktree ──────────────────────────
+
+echo ""
+echo -e "${BOLD}SKILL.md worktree cd instructions${RESET}"
+
+SKILL_FILE="$REPO_ROOT/skills/gh-issue-autopilot/SKILL.md"
+
+test_start "SKILL.md instructs subagent to cd into worktree"
+assert "contains cd into worktree instruction" grep -q "Change directory into the worktree" "$SKILL_FILE"
+
+test_start "SKILL.md instructs subagent to cd back to main repo"
+assert "contains cd back instruction" grep -q "Change directory back to the main repo" "$SKILL_FILE"
+
+test_start "SKILL.md important rules mention cd requirement"
+assert "rules mention cd into worktree" grep -q "cd.*into the worktree directory after creating it" "$SKILL_FILE"
+
 # ── Worktree cleanup ─────────────────────────────────────────────
 
 echo ""
