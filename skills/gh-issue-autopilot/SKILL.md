@@ -283,8 +283,18 @@ This skill runs on Haiku to keep scanning costs low. Perform the triage directly
 
 When triage identifies work that requires code changes (`SOLVE` or `ADDRESS_REVIEWS`), read the `model` field from `.claude/autopilot-config.json` (default: `opus`). Launch a subagent using the Agent tool with that model. This is the only phase that uses the more capable model.
 
-- **`ADDRESS_REVIEWS`** — Launch the subagent with a prompt to: check out the PR branch in a worktree, **change directory into the worktree** (`cd` into it so all subsequent commands run there), read the review comments, address them, commit, and push. After pushing, **change directory back to the main repo** before cleaning up the worktree. Include the PR number, branch name, and a summary of the review feedback in the prompt. Then stop.
-- **`SOLVE`** — First, fetch all issue comments: `gh issue view <NUMBER> --json number,title,body,labels,comments`. Also read the project's `CLAUDE.md` and check for an `## Issue Conventions` section. If present, include those conventions in the subagent prompt so the agent can apply any repo-specific rules (e.g., label-based scoping, title conventions, extra scrutiny). Launch the subagent with a prompt to work on the issue **inside a worktree**. Include the issue number, title, body, labels, **all issue comments**, any issue conventions from CLAUDE.md, the default branch name, and `REPO_ID` in the prompt. The agent should:
+- **`ADDRESS_REVIEWS`** — Launch the subagent with a prompt to: check out the PR branch in a worktree, **change directory into the worktree** (`cd` into it so all subsequent commands run there), read the review comments, address them, commit, and push. After pushing, **change directory back to the main repo** before cleaning up the worktree. Include the PR number, branch name, and a summary of the review feedback in the prompt. **The subagent must operate fully autonomously — it must NOT ask for user input, approval, or confirmation at any point.** It should make its best judgement on how to address the feedback, push the changes, and return. Then stop.
+- **`SOLVE`** — First, fetch all issue comments: `gh issue view <NUMBER> --json number,title,body,labels,comments`. Also read the project's `CLAUDE.md` and check for an `## Issue Conventions` section. If present, include those conventions in the subagent prompt so the agent can apply any repo-specific rules (e.g., label-based scoping, title conventions, extra scrutiny). Launch the subagent with a prompt to work on the issue **inside a worktree**. Include the issue number, title, body, labels, **all issue comments**, any issue conventions from CLAUDE.md, the default branch name, and `REPO_ID` in the prompt.
+
+   **CRITICAL: The subagent MUST be fully autonomous. The subagent prompt MUST explicitly instruct it to:**
+   - **NEVER ask the user for input, approval, or confirmation**
+   - **NEVER present a plan and wait for approval**
+   - **NEVER ask "are you ready to send the PR?" or similar questions**
+   - **NEVER pause or block waiting for human interaction**
+   - **Make all implementation decisions autonomously using its best judgement**
+   - **If uncertain about an approach, pick the best option and proceed — any issues will be worked out in PR review**
+
+   The agent should:
    a. **Update the default branch to latest before creating the worktree** (prevents merge conflicts from working on stale code): `git fetch origin $DEFAULT_BRANCH && git branch -f $DEFAULT_BRANCH origin/$DEFAULT_BRANCH`
    b. Create a worktree: `git worktree add /tmp/autopilot-worktree-${REPO_ID} -b issue-<NUMBER>-<short-description> $DEFAULT_BRANCH`
    c. **Change directory into the worktree immediately**: `cd /tmp/autopilot-worktree-${REPO_ID}` — This is critical. All subsequent commands (file reads, edits, builds, tests, git operations) MUST run from inside the worktree directory to prevent accidental changes to the main repo.
@@ -375,3 +385,4 @@ From this point, the scan loop handles PR review comments and post-merge cleanup
 - **Be thorough.** Read relevant code before making changes. Write tests for new features.
 - **Handle PR feedback.** If the PR has review comments, address them before moving on.
 - **Never close or delete a PR.** Subagents may create PRs, push commits, and leave comments, but closing or deleting a PR is reserved for human reviewers only.
+- **Automatic mode subagents never ask for user input.** Subagents launched by automatic mode (both SOLVE and ADDRESS_REVIEWS) must operate fully autonomously. They must never present plans for approval, ask "are you ready?", or wait for user confirmation. They make their best judgement, send the PR, and any questions or issues are resolved through PR review comments. Only manual mode subagents interact with the user.
