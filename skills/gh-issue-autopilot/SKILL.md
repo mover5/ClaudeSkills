@@ -283,18 +283,20 @@ This skill runs on Haiku to keep scanning costs low. Perform the triage directly
 
 When triage identifies work that requires code changes (`SOLVE` or `ADDRESS_REVIEWS`), read the `model` field from `.claude/autopilot-config.json` (default: `opus`). Launch a subagent using the Agent tool with that model. This is the only phase that uses the more capable model.
 
-- **`ADDRESS_REVIEWS`** — Launch the subagent with a prompt to: check out the PR branch in a worktree, read the review comments, address them, commit, and push. Include the PR number, branch name, and a summary of the review feedback in the prompt. Then stop.
+- **`ADDRESS_REVIEWS`** — Launch the subagent with a prompt to: check out the PR branch in a worktree, **change directory into the worktree** (`cd` into it so all subsequent commands run there), read the review comments, address them, commit, and push. After pushing, **change directory back to the main repo** before cleaning up the worktree. Include the PR number, branch name, and a summary of the review feedback in the prompt. Then stop.
 - **`SOLVE`** — First, fetch all issue comments: `gh issue view <NUMBER> --json number,title,body,labels,comments`. Also read the project's `CLAUDE.md` and check for an `## Issue Conventions` section. If present, include those conventions in the subagent prompt so the agent can apply any repo-specific rules (e.g., label-based scoping, title conventions, extra scrutiny). Launch the subagent with a prompt to work on the issue **inside a worktree**. Include the issue number, title, body, labels, **all issue comments**, any issue conventions from CLAUDE.md, the default branch name, and `REPO_ID` in the prompt. The agent should:
    a. **Update the default branch to latest before creating the worktree** (prevents merge conflicts from working on stale code): `git fetch origin $DEFAULT_BRANCH && git branch -f $DEFAULT_BRANCH origin/$DEFAULT_BRANCH`
    b. Create a worktree: `git worktree add /tmp/autopilot-worktree-${REPO_ID} -b issue-<NUMBER>-<short-description> $DEFAULT_BRANCH`
-   c. All subsequent work (reading code, editing, building, testing) happens in the worktree
-   d. Implement the fix (read code, understand the problem, write the solution, write tests)
-   e. Run the full test suite as documented in the project's CLAUDE.md
-   f. Commit and push the branch (from the worktree)
-   g. Create a PR targeting `$DEFAULT_BRANCH`, following the project's PR conventions (see CLAUDE.md)
-   h. Write the issue number, PR number, and branch name to `$RUNTIME_DIR/active-issue-auto.txt` in the format: `ISSUE_NUMBER PR_NUMBER BRANCH_NAME`
-   i. Clean up the worktree: `git worktree remove /tmp/autopilot-worktree-${REPO_ID}`
-   j. Tell the user what issue you picked up and link to the PR
+   c. **Change directory into the worktree immediately**: `cd /tmp/autopilot-worktree-${REPO_ID}` — This is critical. All subsequent commands (file reads, edits, builds, tests, git operations) MUST run from inside the worktree directory to prevent accidental changes to the main repo.
+   d. All subsequent work (reading code, editing, building, testing) happens in the worktree
+   e. Implement the fix (read code, understand the problem, write the solution, write tests)
+   f. Run the full test suite as documented in the project's CLAUDE.md
+   g. Commit and push the branch (from the worktree)
+   h. Create a PR targeting `$DEFAULT_BRANCH`, following the project's PR conventions (see CLAUDE.md)
+   i. Write the issue number, PR number, and branch name to `$RUNTIME_DIR/active-issue-auto.txt` in the format: `ISSUE_NUMBER PR_NUMBER BRANCH_NAME`
+   j. **Change directory back to the main repo**: `cd <MAIN_REPO_DIR>` — Return to the original repo directory before cleaning up the worktree.
+   k. Clean up the worktree: `git worktree remove /tmp/autopilot-worktree-${REPO_ID}`
+   l. Tell the user what issue you picked up and link to the PR
 
 ### After Merge (cleanup)
 
@@ -363,7 +365,7 @@ From this point, the scan loop handles PR review comments and post-merge cleanup
 
 - **One issue at a time per mode.** Automatic mode and manual mode are independent, but each mode handles only one issue at a time.
 - **No duplicate work across modes.** Before starting work on an issue, always check the other mode's active issue file. Never allow both modes to work on the same issue number simultaneously.
-- **Automatic mode always uses a worktree.** Never modify files in the main repo from automatic mode.
+- **Automatic mode always uses a worktree.** Never modify files in the main repo from automatic mode. The subagent MUST `cd` into the worktree directory after creating it, and `cd` back to the main repo directory before cleaning up the worktree.
 - **Never hardcode the default branch.** Always detect it with `gh repo view`.
 - **Full completion.** An issue is not done until its PR is merged and branches are cleaned up.
 - **Test everything.** Always run the full test suite before committing.
