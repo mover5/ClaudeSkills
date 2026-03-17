@@ -6,6 +6,17 @@ set -euo pipefail
 # Usage: ./install.sh [skill-name]  — install one skill, or all if no argument
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# If running from a git worktree, resolve to the main working tree
+# so symlinks always point to the permanent repo location.
+if command -v git &>/dev/null && git rev-parse --is-inside-work-tree &>/dev/null; then
+  MAIN_WORKTREE="$(git worktree list --porcelain | head -1 | sed 's/^worktree //')"
+  if [ "$MAIN_WORKTREE" != "$(git rev-parse --show-toplevel)" ]; then
+    echo "Warning: running from a git worktree. Using main repo: $MAIN_WORKTREE"
+    SCRIPT_DIR="$MAIN_WORKTREE"
+  fi
+fi
+
 SKILLS_SRC="$SCRIPT_DIR/skills"
 SKILLS_DST="$HOME/.claude/skills"
 
