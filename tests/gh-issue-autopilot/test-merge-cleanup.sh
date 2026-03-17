@@ -20,7 +20,7 @@ CRON_TS_FILE="$RUNTIME_DIR/cron-created-at.txt"
 
 # ── SKILL.md cleanup instructions ─────────────────────────────────
 
-SKILL_MD="$REPO_ROOT/skills/gh-issue-autopilot/SKILL.md"
+SKILL_MD="$REPO_ROOT/plugins/gh-issue-autopilot/skills/gh-issue-autopilot/SKILL.md"
 
 echo -e "${BOLD}Cleanup instructions in SKILL.md${RESET}"
 

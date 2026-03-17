@@ -5,7 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../helpers.sh"
 
-PRECHECK="$REPO_ROOT/skills/gh-issue-autopilot/precheck.sh"
+PRECHECK="$REPO_ROOT/plugins/gh-issue-autopilot/skills/gh-issue-autopilot/precheck.sh"
 
 echo -e "${BOLD}gh-issue-autopilot: Active Hours${RESET}"
 echo ""

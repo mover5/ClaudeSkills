@@ -1,0 +1,8 @@
+{
+  "name": "gh-issue-autopilot",
+  "description": "Solve GitHub Issues automatically or interactively. Supports autopilot loop mode, single-issue manual mode, repo setup, and label config.",
+  "version": "1.0.0",
+  "author": {
+    "name": "mover5"
+  }
+}

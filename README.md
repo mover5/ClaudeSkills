@@ -1,47 +1,40 @@
 # ClaudeSkills
 
-A collection of custom skills for [Claude Code](https://claude.com/claude-code).
+A plugin marketplace for [Claude Code](https://claude.com/claude-code).
 
-## Skills
+## Plugins
 
-| Skill | Description |
-|-------|-------------|
-| [gh-issue-autopilot](skills/gh-issue-autopilot/) | Solve GitHub Issues automatically or interactively. Supports autopilot loop mode, single-issue manual mode, repo setup, and label config. |
+| Plugin | Description |
+|--------|-------------|
+| [gh-issue-autopilot](plugins/gh-issue-autopilot/) | Solve GitHub Issues automatically or interactively. Supports autopilot loop mode, single-issue manual mode, repo setup, and label config. |
 
 ## Installation
 
-```bash
-git clone https://github.com/mover5/ClaudeSkills.git
-cd ClaudeSkills
-./install.sh
+Add the marketplace to Claude Code:
+
+```
+/plugin marketplace add mover5/ClaudeSkills
 ```
 
-This symlinks all skills into `~/.claude/skills/` so they're available in every Claude Code session.
+Then install a plugin:
 
-### Install a specific skill
-
-```bash
-./install.sh gh-issue-autopilot
+```
+/plugin install gh-issue-autopilot@mover-skillz
 ```
 
-### Update
+## Updates
 
-Pull the latest and re-run install (symlinks already point to the repo, so a `git pull` is usually enough):
+Plugins are versioned with semver. To get the latest versions:
 
-```bash
-cd ClaudeSkills
-git pull
+```
+/plugin marketplace update mover-skillz
 ```
 
-### Uninstall
+Or enable auto-update in `/plugin` > Marketplaces > mover-skillz.
 
-```bash
-./uninstall.sh              # all skills
-./uninstall.sh gh-issue-autopilot  # specific skill
-```
+## Adding a new plugin
 
-## Adding a new skill
-
-1. Create a directory under `skills/` with the skill name
-2. Add a `SKILL.md` file following the [Claude Code skill format](https://docs.anthropic.com/en/docs/claude-code/skills)
-3. Run `./install.sh <skill-name>` to symlink it
+1. Create a directory under `plugins/<plugin-name>/`
+2. Add `.claude-plugin/plugin.json` with name, description, version, and author
+3. Add skills under `plugins/<plugin-name>/skills/<skill-name>/SKILL.md`
+4. Add the plugin entry to `.claude-plugin/marketplace.json`

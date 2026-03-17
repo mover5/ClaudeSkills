@@ -2,7 +2,24 @@
 
 ## Project Overview
 
-A collection of custom skills for Claude Code. Skills are stored under `skills/` and symlinked into `~/.claude/skills/` via `install.sh`.
+A Claude Code plugin marketplace called "mover-skillz". Plugins are stored under `plugins/` and distributed via the Claude Code plugin marketplace system.
+
+## Marketplace Structure
+
+```
+.claude-plugin/marketplace.json  — marketplace catalog
+plugins/<name>/.claude-plugin/plugin.json  — plugin manifest
+plugins/<name>/skills/<skill>/SKILL.md  — skill definitions
+```
+
+## Versioning
+
+- All plugins use semantic versioning (MAJOR.MINOR.PATCH), starting at 1.0.0
+- **When making any change to a plugin, you MUST bump the version in BOTH:**
+  - `plugins/<name>/.claude-plugin/plugin.json`
+  - `.claude-plugin/marketplace.json`
+- The versions in both files MUST match
+- Bump patch for fixes, minor for new features, major for breaking changes
 
 ## Git Workflow
 
@@ -24,7 +41,7 @@ A collection of custom skills for Claude Code. Skills are stored under `skills/`
 ./tests/run-tests.sh
 ```
 
-### Running Tests for a Specific Skill
+### Running Tests for a Specific Plugin
 
 ```bash
 ./tests/run-tests.sh gh-issue-autopilot
@@ -33,9 +50,9 @@ A collection of custom skills for Claude Code. Skills are stored under `skills/`
 ### Test Structure
 
 - `tests/helpers.sh` — shared test framework (assertions, temp repos, mocks)
-- `tests/validate-skills.sh` — Layer 1: structural validation for all skills (SKILL.md, frontmatter, install/uninstall)
-- `tests/<skill-name>/test-*.sh` — Layer 2: behavioral tests per skill
+- `tests/validate-skills.sh` — Layer 1: structural validation for all plugins (plugin.json, marketplace.json, SKILL.md)
+- `tests/<plugin-name>/test-*.sh` — Layer 2: behavioral tests per plugin
 
-### Adding Tests for a New Skill
+### Adding Tests for a New Plugin
 
-Create `tests/<skill-name>/` and add `test-*.sh` files. They are auto-discovered by the runner.
+Create `tests/<plugin-name>/` and add `test-*.sh` files. They are auto-discovered by the runner.

@@ -3,6 +3,7 @@
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
+PLUGINS_DIR="$REPO_ROOT/plugins"
 
 # Counters
 _PASS=0

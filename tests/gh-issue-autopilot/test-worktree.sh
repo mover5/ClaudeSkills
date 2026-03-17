@@ -78,7 +78,7 @@ assert_equals "back in main repo branch" "main" "$result_branch"
 echo ""
 echo -e "${BOLD}SKILL.md worktree cd instructions${RESET}"
 
-SKILL_FILE="$REPO_ROOT/skills/gh-issue-autopilot/SKILL.md"
+SKILL_FILE="$REPO_ROOT/plugins/gh-issue-autopilot/skills/gh-issue-autopilot/SKILL.md"
 
 test_start "SKILL.md instructs subagent to cd into worktree"
 assert "contains cd into worktree instruction" grep -q "Change directory into the worktree" "$SKILL_FILE"
