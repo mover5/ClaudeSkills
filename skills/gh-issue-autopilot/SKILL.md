@@ -298,7 +298,9 @@ When triage identifies work that requires code changes (`SOLVE` or `ADDRESS_REVI
 
 When a PR is confirmed merged, determine which mode owns it by checking which active issue file exists (`active-issue-auto.txt` or `active-issue-manual.txt`):
 1. Read the branch name from the active issue file.
-2. Detect the default branch. If the repo is currently on the default branch, pull latest. If on another branch (manual work), skip the pull — don't disrupt manual work.
+2. Detect the default branch and ensure it is up to date:
+   - **Manual mode** (`active-issue-manual.txt`): The user is likely still on the feature branch. Always check out the default branch and pull latest: `git checkout $DEFAULT_BRANCH && git pull origin $DEFAULT_BRANCH`
+   - **Automatic mode** (`active-issue-auto.txt`): If the repo is currently on the default branch, pull latest: `git pull origin $DEFAULT_BRANCH`. If on another branch (manual work in progress), skip the pull — don't disrupt manual work.
 3. Delete the local branch: `git branch -D <branch>`
 4. Delete the remote branch: `git push origin --delete <branch>` (ignore errors if already deleted)
 5. Remove the active issue file.
