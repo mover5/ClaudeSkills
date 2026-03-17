@@ -9,6 +9,8 @@ argument-hint: "[<issue-number> | stop | setup | label <name> | interval <minute
 
 # GitHub Issue Autopilot
 
+**IMPORTANT: This skill is loaded directly via slash command. Do NOT call the Skill tool — just follow the instructions below immediately.**
+
 Solve GitHub Issues either automatically (loop mode in a worktree) or interactively (single-issue mode in the main repo). The two modes are **independent** and can run concurrently.
 
 ## Invocation
