@@ -275,11 +275,29 @@ This skill runs on Haiku to keep scanning costs low. Perform the triage directly
    - If the PR is **still open with no new comments to address**: say "PR still open, no action needed." and **stop**. Do not pick up another issue.
 5. If no active issue (neither file exists), scan for the next issue to work on:
    ```
-   gh issue list --label "<LABEL>" --state open --json number,title,body,labels --limit 1
+   gh issue list --label "<LABEL>" --state open --json number,title,body,labels --limit 20
    ```
 6. If no issues found: say "No open issues with the <LABEL> label found." and **stop**.
-7. **Cross-mode conflict check**: If an issue is found, check `$RUNTIME_DIR/active-issue-manual.txt`. If it exists and its issue number matches the found issue, **skip it** — say "Issue #N is being handled in manual mode, skipping." and **stop**. Do not pick up another issue.
-8. If an issue is found and no conflict: proceed to **Step 2** with action `SOLVE`.
+7. **Sub-issue and dependency ordering**: Before picking an issue, check for sub-issues and dependencies to ensure work is done in the correct order. For each candidate issue (starting from the first), fetch its dependency and sub-issue information:
+   ```bash
+   gh api repos/{owner}/{repo}/issues/{number} --jq '{sub_issues_summary, issue_dependencies_summary}'
+   ```
+   - **Blocked issues**: If `issue_dependencies_summary.total_blocked_by` is greater than 0, the issue depends on other issues that must be completed first. Fetch the blocking issues:
+     ```bash
+     gh api repos/{owner}/{repo}/issues/{number}/sub_issues
+     ```
+     Also check the issue body for task list references (e.g., `- [ ] #123`) that indicate dependencies on other issues.
+     **Skip this issue** and look for its blockers among the candidate list instead. If a blocking issue is in the candidate list, prefer it. If not, log "Issue #N is blocked by unresolved dependencies, skipping." and move to the next candidate.
+   - **Parent issues with incomplete sub-issues**: If `sub_issues_summary.total` is greater than 0 and `sub_issues_summary.completed` is less than `sub_issues_summary.total`, the issue has incomplete sub-issues. Fetch them:
+     ```bash
+     gh api repos/{owner}/{repo}/issues/{number}/sub_issues
+     ```
+     Filter for sub-issues that are still open. If any open sub-issue has the configured label, **prefer working on that sub-issue first** instead of the parent. Pick the first open, labeled sub-issue. If none of the sub-issues have the label, work on the parent issue as normal.
+   - **Unblocked issues with no incomplete sub-issues**: These are ready to work on. Pick the first one.
+   - If all candidate issues are blocked or have incomplete sub-issues with labeled children, pick the most deeply nested unblocked sub-issue (resolve recursively, up to 3 levels deep to avoid infinite loops).
+   - If no unblocked issue can be found after checking all candidates: say "All open issues are blocked by dependencies. Resolve blocking issues first." and **stop**.
+8. **Cross-mode conflict check**: If an issue is selected, check `$RUNTIME_DIR/active-issue-manual.txt`. If it exists and its issue number matches the selected issue, **skip it** — say "Issue #N is being handled in manual mode, skipping." and move to the next candidate. If no more candidates, **stop**.
+9. If an issue is selected and no conflict: proceed to **Step 2** with action `SOLVE`.
 
 **Step 2 — Implementation (escalate to configured model):**
 
@@ -335,9 +353,15 @@ Interactive, single-issue mode. More collaborative during planning and implement
 2. Detect the default branch: `DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name')`
 3. **Cross-mode conflict check**: Read `$RUNTIME_DIR/active-issue-auto.txt`. If it exists and its issue number matches `<NUMBER>`, **error out**: tell the user "Issue #N is already being worked on by automatic mode. Wait for it to finish or stop autopilot first." and **stop**. Do not proceed.
 4. Fetch the issue (including all comments): `gh issue view <NUMBER> --json number,title,body,labels,comments`
-5. Read the project's `CLAUDE.md` and check for an `## Issue Conventions` section. If present, these conventions must be passed to the implementation subagent and applied when processing the issue (e.g., label-based scoping, title conventions, extra scrutiny rules).
-6. Pull the latest from the default branch: `git checkout $DEFAULT_BRANCH && git pull`
-7. Create and checkout a new branch: `git checkout -b issue-<NUMBER>-<short-description>`
+5. **Dependency check**: Fetch the issue's dependency information:
+   ```bash
+   gh api repos/{owner}/{repo}/issues/{NUMBER} --jq '{sub_issues_summary, issue_dependencies_summary}'
+   ```
+   - If `issue_dependencies_summary.total_blocked_by` is greater than 0, **warn the user** that this issue is blocked by other issues. List the blocking issues and suggest working on them first. Ask the user if they want to proceed anyway or switch to a blocking issue.
+   - If `sub_issues_summary.total` is greater than 0 and `sub_issues_summary.completed` is less than `sub_issues_summary.total`, **inform the user** that this issue has incomplete sub-issues. Fetch them with `gh api repos/{owner}/{repo}/issues/{NUMBER}/sub_issues` and list the open ones. Suggest working on sub-issues first, but let the user decide.
+6. Read the project's `CLAUDE.md` and check for an `## Issue Conventions` section. If present, these conventions must be passed to the implementation subagent and applied when processing the issue (e.g., label-based scoping, title conventions, extra scrutiny rules).
+7. Pull the latest from the default branch: `git checkout $DEFAULT_BRANCH && git pull`
+8. Create and checkout a new branch: `git checkout -b issue-<NUMBER>-<short-description>`
 
 ### Phase 2 & 3: Planning and Implementation (escalate to configured model)
 
