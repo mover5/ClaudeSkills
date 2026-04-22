@@ -1,0 +1,11 @@
+{
+  "entities": [
+    "cover.garage_door",
+    "lock.*"
+  ],
+  "services": [
+    "homeassistant.restart",
+    "hassio.host_shutdown",
+    "hassio.host_reboot"
+  ]
+}
