@@ -7,6 +7,7 @@ A plugin marketplace for [Claude Code](https://claude.com/claude-code).
 | Plugin | Description |
 |--------|-------------|
 | [gh-issue-autopilot](plugins/gh-issue-autopilot/) | Solve GitHub Issues automatically or interactively. Supports autopilot loop mode, single-issue manual mode, repo setup, and label config. |
+| [homeassistant-mcp](plugins/homeassistant-mcp/) | MCP server for Home Assistant: entity state, service calls, and CRUD for automations, scripts, scenes, and helpers. |
 
 ## Installation
 
