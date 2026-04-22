@@ -53,22 +53,43 @@ This plugin ships via the `mover-skillz` marketplace. In Claude Code:
 /plugin install homeassistant-mcp@mover-skillz
 ```
 
-Claude Code runs `npm install` on plugin install to pull runtime deps (including `tsx`, which runs the TypeScript source directly — no build step). Configure from the installed plugin directory:
+Claude Code runs `npm install` on plugin install to pull runtime deps (including `tsx`, which runs the TypeScript source directly — no build step).
 
-```bash
-cp .env.example .env                         # edit with your values
-cp deny-list.example.json deny-list.json     # edit
+### Configuration — no manual steps required
+
+On first use, if no config is found, the server will tell Claude to invoke the `homeassistant-mcp:setup` skill. That skill walks you through entering your HA URL and token, writes them to a persistent location, and verifies the connection.
+
+You can also trigger setup manually at any time:
+
+```
+/homeassistant-mcp:setup
 ```
 
-The plugin's `.mcp.json` launches `src/index.ts` via `${CLAUDE_PLUGIN_ROOT}/node_modules/.bin/tsx` — no manual `~/.claude.json` edits needed.
+Config is stored **outside** the plugin install dir so it survives version bumps. Lookup order:
 
-The server loads environment from `.env` next to itself via `dotenv` on every launch. Both `.env` and `deny-list.json` are gitignored.
+1. `$HA_MCP_CONFIG_DIR/.env` if set
+2. `$XDG_CONFIG_HOME/homeassistant-mcp/.env` if `XDG_CONFIG_HOME` is set
+3. `~/.config/homeassistant-mcp/.env` (default)
+
+### Manual configuration (if you prefer)
+
+```bash
+mkdir -p ~/.config/homeassistant-mcp
+cat > ~/.config/homeassistant-mcp/.env <<'EOF'
+HA_URL=http://192.168.1.30:8123
+HA_TOKEN=your_long_lived_access_token
+EOF
+chmod 600 ~/.config/homeassistant-mcp/.env
+```
+
+Optional: drop a `deny-list.json` in the same dir (see `deny-list.example.json` in the plugin install).
 
 Variables:
 
 - `HA_URL` — e.g. `http://192.168.1.30:8123` (trailing slash tolerated)
-- `HA_TOKEN` — long-lived access token from HA → profile → Security
-- `HA_DENY_LIST_PATH` — optional, defaults to `./deny-list.json` next to the server
+- `HA_TOKEN` — long-lived access token from HA → profile → Security → Long-Lived Access Tokens
+- `HA_MCP_CONFIG_DIR` — optional override for the whole config dir
+- `HA_DENY_LIST_PATH` — optional override for the deny-list file path; otherwise defaults to `<config-dir>/deny-list.json`, falling back to a legacy `deny-list.json` next to the server if present
 
 ## Developing
 

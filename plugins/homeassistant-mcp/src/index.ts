@@ -2,29 +2,69 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { config as loadEnv } from 'dotenv';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-loadEnv({ path: resolve(__dirname, '..', '.env'), quiet: true });
+
+function resolveConfigDir(): string {
+  if (process.env.HA_MCP_CONFIG_DIR) return process.env.HA_MCP_CONFIG_DIR;
+  if (process.env.XDG_CONFIG_HOME)
+    return resolve(process.env.XDG_CONFIG_HOME, 'homeassistant-mcp');
+  const home = process.env.HOME ?? process.env.USERPROFILE;
+  if (home) return resolve(home, '.config', 'homeassistant-mcp');
+  return resolve(__dirname, '..');
+}
+
+const CONFIG_DIR = resolveConfigDir();
+const CONFIG_ENV_PATH = resolve(CONFIG_DIR, '.env');
+const LEGACY_ENV_PATH = resolve(__dirname, '..', '.env');
+
+loadEnv({ path: CONFIG_ENV_PATH, quiet: true });
+if ((!process.env.HA_URL || !process.env.HA_TOKEN) && CONFIG_ENV_PATH !== LEGACY_ENV_PATH) {
+  loadEnv({ path: LEGACY_ENV_PATH, quiet: true });
+}
 
 const HA_URL_RAW = process.env.HA_URL;
 const HA_TOKEN = process.env.HA_TOKEN;
+const CONFIG_READY = Boolean(HA_URL_RAW && HA_TOKEN);
+const HA_URL = HA_URL_RAW?.replace(/\/$/, '') ?? '';
 
-if (!HA_URL_RAW || !HA_TOKEN) {
-  console.error('[ha-mcp] HA_URL and HA_TOKEN environment variables are required');
-  process.exit(1);
+function resolveDenyListPath(): string {
+  if (process.env.HA_DENY_LIST_PATH) return process.env.HA_DENY_LIST_PATH;
+  const primary = resolve(CONFIG_DIR, 'deny-list.json');
+  if (existsSync(primary)) return primary;
+  const legacy = resolve(__dirname, '..', 'deny-list.json');
+  if (existsSync(legacy)) return legacy;
+  return primary;
 }
 
-const HA_URL = HA_URL_RAW.replace(/\/$/, '');
+const DENY_LIST_PATH = resolveDenyListPath();
 
-const DENY_LIST_PATH =
-  process.env.HA_DENY_LIST_PATH ?? resolve(__dirname, '..', 'deny-list.json');
+function setupRequiredMessage(): string {
+  return [
+    `Home Assistant MCP is not configured — HA_URL and HA_TOKEN are required.`,
+    ``,
+    `RECOMMENDED FIX (for the assistant): invoke the \`homeassistant-mcp:setup\` skill now.`,
+    `It will prompt the user for their Home Assistant URL and a long-lived access`,
+    `token, then write them to: ${CONFIG_ENV_PATH}`,
+    ``,
+    `Manual fix: create ${CONFIG_ENV_PATH} with:`,
+    `  HA_URL=http://<your-ha-host>:8123`,
+    `  HA_TOKEN=<long-lived-access-token>`,
+    ``,
+    `Generate a token in Home Assistant: profile icon (bottom-left) → Security tab`,
+    `→ Long-Lived Access Tokens → Create Token.`,
+    ``,
+    `This path is stable across plugin version bumps, so you only set it once.`,
+  ].join('\n');
+}
 
 async function ha(path: string, init: RequestInit = {}): Promise<unknown> {
+  if (!CONFIG_READY) throw new Error(setupRequiredMessage());
   const res = await fetch(`${HA_URL}${path}`, {
     ...init,
     headers: {
@@ -655,4 +695,11 @@ server.registerTool(
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
+if (!CONFIG_READY) {
+  console.error(
+    `[ha-mcp] WARNING: no HA_URL/HA_TOKEN — tools will error until setup runs. ` +
+      `Expected config at: ${CONFIG_ENV_PATH}. ` +
+      `Invoke the homeassistant-mcp:setup skill to configure.`,
+  );
+}
 console.error('[ha-mcp] connected on stdio');
