@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "home-assistant": {
-      "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/index.js"]
+      "command": "${CLAUDE_PLUGIN_ROOT}/node_modules/.bin/tsx",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/src/index.ts"]
     }
   }
 }

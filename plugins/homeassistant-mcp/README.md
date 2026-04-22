@@ -53,16 +53,14 @@ This plugin ships via the `mover-skillz` marketplace. In Claude Code:
 /plugin install homeassistant-mcp@mover-skillz
 ```
 
-Then build and configure from the installed plugin directory:
+Claude Code runs `npm install` on plugin install to pull runtime deps (including `tsx`, which runs the TypeScript source directly — no build step). Configure from the installed plugin directory:
 
 ```bash
-npm install
-npm run build
 cp .env.example .env                         # edit with your values
 cp deny-list.example.json deny-list.json     # edit
 ```
 
-The plugin's `.mcp.json` resolves `${CLAUDE_PLUGIN_ROOT}/dist/index.js` automatically — no manual `~/.claude.json` edits needed.
+The plugin's `.mcp.json` launches `src/index.ts` via `${CLAUDE_PLUGIN_ROOT}/node_modules/.bin/tsx` — no manual `~/.claude.json` edits needed.
 
 The server loads environment from `.env` next to itself via `dotenv` on every launch. Both `.env` and `deny-list.json` are gitignored.
 
@@ -71,3 +69,13 @@ Variables:
 - `HA_URL` — e.g. `http://192.168.1.30:8123` (trailing slash tolerated)
 - `HA_TOKEN` — long-lived access token from HA → profile → Security
 - `HA_DENY_LIST_PATH` — optional, defaults to `./deny-list.json` next to the server
+
+## Developing
+
+The runtime entry point is `src/index.ts` — there's no build step and no `dist/`, so source is always what runs. `tsx` (a runtime TS loader) is a regular dependency; `typescript` is kept as a devDep for type-checking only.
+
+```bash
+npm install
+npm run dev          # tsx watch mode against src/index.ts
+npm run typecheck    # tsc --noEmit, no output artifacts
+```

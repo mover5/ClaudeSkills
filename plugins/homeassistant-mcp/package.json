@@ -1,19 +1,17 @@
 {
   "name": "ha-mcp",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "MCP server for Home Assistant: entity state, service calls, and automation CRUD",
   "type": "module",
-  "bin": {
-    "ha-mcp": "dist/index.js"
-  },
   "scripts": {
-    "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "tsc --watch"
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "dotenv": "^17.4.2",
+    "tsx": "^4.21.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
