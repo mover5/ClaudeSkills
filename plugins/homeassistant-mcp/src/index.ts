@@ -237,7 +237,7 @@ const server = new McpServer(
   { name: 'home-assistant', version: '0.2.0' },
   {
     instructions:
-      'Home Assistant MCP server. Discover with list_entities / get_state. Act with call_service (subject to deny-list). Manage config-backed entities with the automation / script / scene / helper tools — always call the matching reload_* after create/update/delete.',
+      'Home Assistant MCP server. Discover with list_entities / get_state / get_logbook (recent events, noise-filtered by default). Act with call_service (subject to deny-list). Manage config-backed entities with the automation / script / scene / helper tools — always call the matching reload_* after create/update/delete.',
   },
 );
 
@@ -285,6 +285,109 @@ server.registerTool(
   },
   async ({ entity_id }) => {
     return textResult(await ha(`/api/states/${encodeURIComponent(entity_id)}`));
+  },
+);
+
+// ---- Logbook ----
+
+const LOGBOOK_EXCLUDED_DOMAINS = new Set([
+  'sensor',
+  'sun',
+  'weather',
+  'update',
+  'zone',
+  'device_tracker',
+  'number',
+  'select',
+  'button',
+  'scene',
+]);
+
+const LOGBOOK_EXCLUDED_STATES = new Set(['unavailable', 'unknown', 'None', '']);
+
+const LOGBOOK_EXCLUDED_ENTITY_SUBSTRINGS = [
+  '_battery',
+  '_signal',
+  '_rssi',
+  '_lqi',
+  '_linkquality',
+  '_uptime',
+  '_boot',
+];
+
+interface LogbookEntry {
+  when?: string;
+  name?: string;
+  entity_id?: string;
+  state?: string;
+  domain?: string;
+  message?: string;
+}
+
+function shouldIncludeLogbookEntry(entry: LogbookEntry): boolean {
+  const entityId = entry.entity_id ?? '';
+  const domain = entry.domain ?? entityId.split('.')[0] ?? '';
+  const state = entry.state ?? '';
+  if (LOGBOOK_EXCLUDED_DOMAINS.has(domain)) return false;
+  if (LOGBOOK_EXCLUDED_STATES.has(state)) return false;
+  if (LOGBOOK_EXCLUDED_ENTITY_SUBSTRINGS.some((s) => entityId.includes(s))) return false;
+  return true;
+}
+
+server.registerTool(
+  'get_logbook',
+  {
+    description:
+      'Fetch Home Assistant logbook events over a recent window. Returns time-ordered events with entity_id, friendly_name, state, domain, and timestamp. By default applies noise filters (excludes sensors, weather, battery/signal entities, unavailable/unknown states) so the output is usable for pattern analysis; pass include_noisy=true for the raw stream. Optionally scope to a single entity_id.',
+    inputSchema: {
+      days_back: z
+        .number()
+        .int()
+        .min(1)
+        .max(30)
+        .optional()
+        .describe('How many days of history to fetch (default 7, max 30).'),
+      entity_id: z
+        .string()
+        .optional()
+        .describe('Restrict to events for this entity_id (e.g. "light.living_room").'),
+      include_noisy: z
+        .boolean()
+        .optional()
+        .describe(
+          'If true, return all events without the default noise filters. Default false.',
+        ),
+    },
+  },
+  async ({ days_back, entity_id, include_noisy }) => {
+    const days = days_back ?? 7;
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    const now = new Date().toISOString();
+    const params = new URLSearchParams({ end_time: now });
+    if (entity_id) params.set('entity', entity_id);
+    const raw = (await ha(
+      `/api/logbook/${since}?${params.toString()}`,
+    )) as LogbookEntry[];
+    const filtered = include_noisy ? raw : raw.filter(shouldIncludeLogbookEntry);
+    const events = filtered
+      .map((e) => {
+        const eid = e.entity_id ?? '';
+        return {
+          timestamp: e.when ?? '',
+          entity_id: eid,
+          friendly_name: e.name ?? eid,
+          state: e.state ?? '',
+          domain: e.domain ?? eid.split('.')[0] ?? '',
+          message: e.message,
+        };
+      })
+      .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+    return textResult({
+      period: { since, until: now, days_back: days },
+      filtered: !include_noisy,
+      count: events.length,
+      events,
+    });
   },
 );
 

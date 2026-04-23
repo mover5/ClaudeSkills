@@ -10,6 +10,7 @@ Minimal MCP server for Home Assistant. Exposes entity state, service calls, and 
 | --- | --- |
 | `list_entities` | List entities (optional `domain` filter) |
 | `get_state` | Full state + attributes for one `entity_id` |
+| `get_logbook` | Recent logbook events (default last 7 days, noise-filtered); `include_noisy: true` for raw |
 | `call_service` | Call any HA service — **subject to deny-list** |
 
 **Automations / scripts / scenes** — same six tools per domain:
@@ -23,6 +24,11 @@ Covers: `automation`, `script`, `scene`.
 `list_helpers`, `get_helper`, `create_helper`, `update_helper`, `delete_helper`, `reload_helpers`.
 
 All writes go through HA's config API (lands in the corresponding `.yaml` / storage). **Always call the matching `reload_*` after create/update/delete** or changes won't take effect at runtime. Reload tools are exempt from the `call_service` deny-list.
+
+## Skills
+
+- **`homeassistant-mcp:setup`** — first-run config (HA URL + token) with connection verification. Auto-invoked by Claude when the server reports missing credentials.
+- **`homeassistant-mcp:analyze-logbook`** — pulls recent logbook activity, finds repeated behavior patterns (time-of-day, device correlations, manual-routine-looking actions), and proposes automations Claude can create directly via `create_automation` — no YAML editing.
 
 ## Deny-list
 
