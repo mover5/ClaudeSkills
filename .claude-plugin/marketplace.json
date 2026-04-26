@@ -13,7 +13,7 @@
     {
       "name": "homeassistant-mcp",
       "description": "MCP server for Home Assistant: entity state, service calls, and CRUD for automations, scripts, scenes, and helpers.",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "source": "./plugins/homeassistant-mcp"
     }
   ]

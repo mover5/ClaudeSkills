@@ -21,9 +21,11 @@ Covers: `automation`, `script`, `scene`.
 
 **Helpers** — parametrized by `helper_type` (`input_boolean`, `input_number`, `input_text`, `input_select`, `input_datetime`, `input_button`, `timer`, `counter`):
 
-`list_helpers`, `get_helper`, `create_helper`, `update_helper`, `delete_helper`, `reload_helpers`.
+`list_helpers`, `get_helper`, `create_helper`, `update_helper`, `delete_helper`.
 
-All writes go through HA's config API (lands in the corresponding `.yaml` / storage). **Always call the matching `reload_*` after create/update/delete** or changes won't take effect at runtime. Reload tools are exempt from the `call_service` deny-list.
+Helpers go through HA's WebSocket API (storage collection) and apply immediately — no reload step needed. HA assigns the `id` on create; reuse it for update/delete. YAML-defined helpers are not editable here; use `list_entities` to see them.
+
+Automation / script / scene writes go through HA's REST config API (lands in the corresponding `.yaml` / storage). **Always call the matching `reload_*` after create/update/delete** or changes won't take effect at runtime. Reload tools are exempt from the `call_service` deny-list.
 
 ## Skills
 

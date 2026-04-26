@@ -81,6 +81,75 @@ async function ha(path: string, init: RequestInit = {}): Promise<unknown> {
   return text ? JSON.parse(text) : null;
 }
 
+/**
+ * Send a single command over the HA WebSocket API and return its result.
+ *
+ * Used for endpoints that have no REST equivalent — notably the storage-backed
+ * helper collections (input_boolean, input_number, ..., timer, counter), whose
+ * CRUD lives at `<domain>/list|create|update|delete` over WS.
+ */
+async function haWs<T = unknown>(
+  type: string,
+  payload: Record<string, unknown> = {},
+): Promise<T> {
+  if (!CONFIG_READY) throw new Error(setupRequiredMessage());
+  const wsUrl = `${HA_URL.replace(/^http/, 'ws')}/api/websocket`;
+  const ws = new WebSocket(wsUrl);
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const cmdId = 1;
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try {
+        ws.close();
+      } catch {}
+      reject(new Error(`HA WebSocket timeout waiting for ${type}`));
+    }, 15000);
+
+    const finish = (err: Error | null, value?: T) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      try {
+        ws.close();
+      } catch {}
+      if (err) reject(err);
+      else resolve(value as T);
+    };
+
+    ws.addEventListener('message', (event: MessageEvent) => {
+      let msg: { type?: string; id?: number; success?: boolean; result?: unknown; error?: { message?: string }; message?: string };
+      try {
+        msg = JSON.parse(typeof event.data === 'string' ? event.data : event.data.toString());
+      } catch (err) {
+        finish(new Error(`HA WebSocket: invalid JSON: ${(err as Error).message}`));
+        return;
+      }
+      if (msg.type === 'auth_required') {
+        ws.send(JSON.stringify({ type: 'auth', access_token: HA_TOKEN }));
+      } else if (msg.type === 'auth_invalid') {
+        finish(new Error(`HA WebSocket auth failed: ${msg.message ?? 'invalid token'}`));
+      } else if (msg.type === 'auth_ok') {
+        ws.send(JSON.stringify({ id: cmdId, type, ...payload }));
+      } else if (msg.type === 'result' && msg.id === cmdId) {
+        if (msg.success) finish(null, msg.result as T);
+        else finish(new Error(`HA WS ${type}: ${msg.error?.message ?? JSON.stringify(msg.error)}`));
+      }
+    });
+
+    ws.addEventListener('error', (event: Event) => {
+      const m = (event as ErrorEvent).message ?? 'connection error';
+      finish(new Error(`HA WebSocket error: ${m}`));
+    });
+
+    ws.addEventListener('close', () => {
+      finish(new Error(`HA WebSocket closed before ${type} completed`));
+    });
+  });
+}
+
 type DenyList = { entities: string[]; services: string[] };
 
 function loadDenyList(): DenyList {
@@ -237,7 +306,7 @@ const server = new McpServer(
   { name: 'home-assistant', version: '0.2.0' },
   {
     instructions:
-      'Home Assistant MCP server. Discover with list_entities / get_state / get_logbook (recent events, noise-filtered by default). Act with call_service (subject to deny-list). Manage config-backed entities with the automation / script / scene / helper tools — always call the matching reload_* after create/update/delete.',
+      'Home Assistant MCP server. Discover with list_entities / get_state / get_logbook (recent events, noise-filtered by default). Act with call_service (subject to deny-list). Manage config-backed entities with the automation / script / scene tools — call the matching reload_* after create/update/delete. Helpers (input_*, timer, counter) use the WebSocket API and apply immediately, so no reload step is needed.',
   },
 );
 
@@ -651,6 +720,13 @@ registerEntityCrud({
 });
 
 // ---- Generalized helper tools (input_*, timer, counter) ----
+//
+// HA helpers are storage-backed collections with no REST CRUD endpoints —
+// `/api/config/<type>/config/<id>` only exists for automation/script/scene.
+// All read/write goes through the WebSocket API:
+//   <type>/list, <type>/create, <type>/update, <type>/delete
+// where the id field on update/delete is `<type>_id`. Storage changes are
+// applied immediately, so no reload is needed.
 
 const HELPER_TYPES = [
   'input_boolean',
@@ -667,7 +743,7 @@ const helperTypeSchema = z.enum(HELPER_TYPES);
 server.registerTool(
   'list_helpers',
   {
-    description: `List helper entities. Types: ${HELPER_TYPES.join(', ')}. Pass helper_type to filter to one kind; omit for all.`,
+    description: `List helpers (storage-backed only) with their HA-assigned id, name, and full config. Types: ${HELPER_TYPES.join(', ')}. Pass helper_type to filter to one kind; omit for all. YAML-defined helpers don't appear here — use list_entities for those.`,
     inputSchema: {
       helper_type: helperTypeSchema
         .optional()
@@ -675,26 +751,14 @@ server.registerTool(
     },
   },
   async ({ helper_type }) => {
-    const states = (await ha('/api/states')) as Array<{
-      entity_id: string;
-      state: string;
-      attributes?: Record<string, unknown>;
-    }>;
     const types = helper_type ? [helper_type] : [...HELPER_TYPES];
-    const items = states
-      .filter((s) => types.some((t) => s.entity_id.startsWith(`${t}.`)))
-      .map((s) => {
-        const a = s.attributes ?? {};
-        const type = s.entity_id.split('.')[0];
-        return {
-          entity_id: s.entity_id,
-          type,
-          id: a.id ?? s.entity_id.slice(type.length + 1),
-          friendly_name: a.friendly_name,
-          state: s.state,
-        };
-      });
-    return textResult(items);
+    const results = await Promise.all(
+      types.map(async (t) => {
+        const items = (await haWs(`${t}/list`)) as Array<Record<string, unknown>>;
+        return items.map((item) => ({ type: t, ...item }));
+      }),
+    );
+    return textResult(results.flat());
   },
 );
 
@@ -702,16 +766,24 @@ server.registerTool(
   'get_helper',
   {
     description:
-      'Fetch the full config for one helper by type + internal id. Config shape varies by helper type — see HA docs for the exact keys each type accepts.',
+      'Fetch one helper by type + id. Returns the full config as stored. Config shape varies by helper type — see HA docs.',
     inputSchema: {
       helper_type: helperTypeSchema,
-      id: z.string().describe("The helper's id attribute (not entity_id)"),
+      id: z.string().describe("The helper's HA-assigned id (from list_helpers, not entity_id)"),
     },
   },
   async ({ helper_type, id }) => {
-    return textResult(
-      await ha(`/api/config/${helper_type}/config/${encodeURIComponent(id)}`),
-    );
+    const items = (await haWs(`${helper_type}/list`)) as Array<{ id?: string }>;
+    const item = items.find((it) => it.id === id);
+    if (!item) {
+      return {
+        content: [
+          { type: 'text' as const, text: `No ${helper_type} found with id "${id}". Use list_helpers to see available ids.` },
+        ],
+        isError: true as const,
+      };
+    }
+    return textResult(item);
   },
 );
 
@@ -719,22 +791,17 @@ server.registerTool(
   'create_helper',
   {
     description:
-      'Create a new helper of a given type. Config shape varies by helper type (e.g. input_number takes {name, min, max, step, initial, mode, unit_of_measurement}; input_boolean takes {name, initial, icon}; timer takes {name, duration}; counter takes {name, initial, step, minimum, maximum}). Call reload_helpers with the same type after to activate.',
+      'Create a new helper. HA assigns the id — returned in the result. Config shape varies by helper type: input_boolean {name, initial?, icon?}; input_number {name, min, max, step?, initial?, mode?, unit_of_measurement?, icon?}; input_text {name, min?, max?, initial?, pattern?, mode?, icon?}; input_select {name, options[], initial?, icon?}; input_datetime {name, has_date?, has_time?, initial?, icon?}; input_button {name, icon?}; timer {name, duration?, restore?, icon?}; counter {name, initial?, step?, minimum?, maximum?, restore?, icon?}. Storage helpers apply immediately — no reload needed.',
     inputSchema: {
       helper_type: helperTypeSchema,
-      id: z.string().describe('Unique id for the new helper'),
       config: z
         .record(z.any())
-        .describe('Type-specific config (see HA docs for each helper type)'),
+        .describe('Type-specific config (see description for fields per type). `name` is required for all types.'),
     },
   },
-  async ({ helper_type, id, config }) => {
-    return textResult(
-      await ha(`/api/config/${helper_type}/config/${encodeURIComponent(id)}`, {
-        method: 'POST',
-        body: JSON.stringify(config),
-      }),
-    );
+  async ({ helper_type, config }) => {
+    const result = await haWs(`${helper_type}/create`, config);
+    return textResult(result);
   },
 );
 
@@ -742,20 +809,19 @@ server.registerTool(
   'update_helper',
   {
     description:
-      'Update an existing helper by type + id (upsert). Call reload_helpers with the same type after.',
+      'Update an existing helper by type + id. Pass the full new config. Storage helpers apply immediately — no reload needed.',
     inputSchema: {
       helper_type: helperTypeSchema,
-      id: z.string(),
+      id: z.string().describe('HA-assigned id from list_helpers'),
       config: z.record(z.any()),
     },
   },
   async ({ helper_type, id, config }) => {
-    return textResult(
-      await ha(`/api/config/${helper_type}/config/${encodeURIComponent(id)}`, {
-        method: 'POST',
-        body: JSON.stringify(config),
-      }),
-    );
+    const result = await haWs(`${helper_type}/update`, {
+      [`${helper_type}_id`]: id,
+      ...config,
+    });
+    return textResult(result);
   },
 );
 
@@ -763,34 +829,15 @@ server.registerTool(
   'delete_helper',
   {
     description:
-      'Delete a helper by type + id. Call reload_helpers with the same type after.',
+      'Delete a helper by type + id. Applies immediately — no reload needed.',
     inputSchema: {
       helper_type: helperTypeSchema,
-      id: z.string(),
+      id: z.string().describe('HA-assigned id from list_helpers'),
     },
   },
   async ({ helper_type, id }) => {
-    return textResult(
-      await ha(`/api/config/${helper_type}/config/${encodeURIComponent(id)}`, {
-        method: 'DELETE',
-      }),
-    );
-  },
-);
-
-server.registerTool(
-  'reload_helpers',
-  {
-    description:
-      'Reload helpers of one type in Home Assistant to apply changes. Call this with the matching helper_type after create/update/delete_helper. Not subject to the call_service deny-list.',
-    inputSchema: {
-      helper_type: helperTypeSchema,
-    },
-  },
-  async ({ helper_type }) => {
-    const result = await ha(`/api/services/${helper_type}/reload`, {
-      method: 'POST',
-      body: JSON.stringify({}),
+    const result = await haWs(`${helper_type}/delete`, {
+      [`${helper_type}_id`]: id,
     });
     return textResult(result ?? { ok: true });
   },
