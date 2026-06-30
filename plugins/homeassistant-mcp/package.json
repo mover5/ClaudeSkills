@@ -1,6 +1,6 @@
 {
   "name": "ha-mcp",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "MCP server for Home Assistant: entity state, service calls, and automation CRUD",
   "type": "module",
   "scripts": {
