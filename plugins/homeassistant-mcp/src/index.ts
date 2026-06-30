@@ -303,10 +303,10 @@ function missingReferencesError(missing: string[], op: string, label: string) {
 }
 
 const server = new McpServer(
-  { name: 'home-assistant', version: '0.2.0' },
+  { name: 'home-assistant', version: '0.4.0' },
   {
     instructions:
-      'Home Assistant MCP server. Discover with list_entities / get_state / get_logbook (recent events, noise-filtered by default). Act with call_service (subject to deny-list). Manage config-backed entities with the automation / script / scene tools — call the matching reload_* after create/update/delete. Helpers (input_*, timer, counter) use the WebSocket API and apply immediately, so no reload step is needed.',
+      'Home Assistant MCP server. Discover with list_entities / get_state. For history: get_logbook = human-readable events (filtered, no numerical sensors); get_history = raw time-series for any entity (works on noisy numerical sensors like signal/battery/energy/temperature that the logbook hides). Act with call_service (subject to deny-list). Manage config-backed entities with the automation / script / scene tools — call the matching reload_* after create/update/delete. Helpers (input_*, timer, counter) use the WebSocket API and apply immediately, so no reload step is needed.',
   },
 );
 
@@ -456,6 +456,180 @@ server.registerTool(
       filtered: !include_noisy,
       count: events.length,
       events,
+    });
+  },
+);
+
+// ---- History ----
+//
+// HA's logbook API filters out many noisy domains (sensor, weather, ...) and
+// substring patterns (_signal, _battery, ...) by design — even include_noisy on
+// get_logbook can't get them, because HA's own /api/logbook never returned them.
+// The History panel in HA uses /api/history/period instead, which returns raw
+// state-change records for any entity. This tool wraps that endpoint.
+
+interface HistoryPoint {
+  entity_id?: string;
+  state?: string;
+  last_changed?: string;
+  last_updated?: string;
+  attributes?: Record<string, unknown>;
+}
+
+function tryParseFloat(s: string | undefined | null): number | null {
+  if (s === undefined || s === null || s === '') return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+function downsampleUniform<T>(items: T[], max: number): T[] {
+  if (items.length <= max) return items;
+  const out: T[] = [];
+  const step = (items.length - 1) / (max - 1);
+  for (let i = 0; i < max; i++) out.push(items[Math.round(i * step)]);
+  return out;
+}
+
+server.registerTool(
+  'get_history',
+  {
+    description:
+      "Fetch numerical state-change history for one or more entities. Wraps HA's /api/history/period (what the History panel uses) — works for noisy numerical sensors that get_logbook filters out (signal strength, battery, energy, temperature, etc.). Default window is the last 24h. Use summarize=true for per-entity {first, last, min, max, mean, count} instead of raw points. Raw points are uniformly downsampled to max_points (default 500) to keep responses manageable for high-frequency sensors. For multiple entities pass a comma-separated entity_id (e.g. \"sensor.a,sensor.b\").",
+    inputSchema: {
+      entity_id: z
+        .string()
+        .describe(
+          'Entity to fetch. For multiple entities, pass a comma-separated list (e.g. "sensor.a,sensor.b").',
+        ),
+      hours_back: z
+        .number()
+        .min(0.1)
+        .max(720)
+        .optional()
+        .describe(
+          'Window size in hours, ending now. Default 24 (last 24h). Ignored if start is provided.',
+        ),
+      start: z
+        .string()
+        .optional()
+        .describe('ISO 8601 start time (e.g. "2026-06-29T00:00:00Z"). Overrides hours_back.'),
+      end: z.string().optional().describe('ISO 8601 end time. Defaults to now.'),
+      summarize: z
+        .boolean()
+        .optional()
+        .describe(
+          'If true, return per-entity {count, first/last state+time, numeric {min, max, mean}} instead of raw points. Default false.',
+        ),
+      significant_only: z
+        .boolean()
+        .optional()
+        .describe(
+          "Apply HA's significant-changes filter (skips micro-fluctuations). Default true.",
+        ),
+      include_attributes: z
+        .boolean()
+        .optional()
+        .describe(
+          'If true, include attributes on each raw point. Default false (much smaller responses). Ignored in summarize mode.',
+        ),
+      max_points: z
+        .number()
+        .int()
+        .min(1)
+        .max(5000)
+        .optional()
+        .describe(
+          'Cap on raw points returned per entity. Series longer than this are uniformly downsampled. Default 500. Ignored in summarize mode.',
+        ),
+    },
+  },
+  async ({
+    entity_id,
+    hours_back,
+    start,
+    end,
+    summarize,
+    significant_only,
+    include_attributes,
+    max_points,
+  }) => {
+    const sigOnly = significant_only ?? true;
+    const includeAttrs = include_attributes ?? false;
+    const cap = max_points ?? 500;
+    const doSummary = summarize ?? false;
+
+    const now = new Date();
+    const endIso = end ?? now.toISOString();
+    const startIso = start ?? new Date(now.getTime() - (hours_back ?? 24) * 3_600_000).toISOString();
+
+    const params = new URLSearchParams({
+      filter_entity_id: entity_id,
+      end_time: endIso,
+      minimal_response: 'true',
+    });
+    if (sigOnly) params.set('significant_changes_only', 'true');
+    if (!includeAttrs) params.set('no_attributes', 'true');
+
+    const raw = (await ha(
+      `/api/history/period/${startIso}?${params.toString()}`,
+    )) as HistoryPoint[][];
+
+    const series = (raw ?? []).map((points) => {
+      const eid = points[0]?.entity_id ?? '';
+      if (doSummary) {
+        let min = Infinity;
+        let max = -Infinity;
+        let sum = 0;
+        let n = 0;
+        for (const p of points) {
+          const v = tryParseFloat(p.state);
+          if (v === null) continue;
+          if (v < min) min = v;
+          if (v > max) max = v;
+          sum += v;
+          n++;
+        }
+        const first = points[0];
+        const last = points[points.length - 1];
+        const summary: Record<string, unknown> = {
+          entity_id: eid,
+          count: points.length,
+          first_at: first?.last_changed ?? first?.last_updated ?? null,
+          last_at: last?.last_changed ?? last?.last_updated ?? null,
+          first_state: first?.state ?? null,
+          last_state: last?.state ?? null,
+        };
+        if (n > 0) {
+          summary.numeric = {
+            numeric_count: n,
+            min,
+            max,
+            mean: Number((sum / n).toFixed(4)),
+          };
+        }
+        return summary;
+      } else {
+        const sampled = downsampleUniform(points, cap);
+        return {
+          entity_id: eid,
+          count: points.length,
+          returned: sampled.length,
+          downsampled: sampled.length < points.length,
+          points: sampled.map((p) => ({
+            t: p.last_changed ?? p.last_updated ?? '',
+            state: p.state ?? '',
+            ...(includeAttrs && p.attributes ? { attributes: p.attributes } : {}),
+          })),
+        };
+      }
+    });
+
+    return textResult({
+      period: { start: startIso, end: endIso },
+      mode: doSummary ? 'summary' : 'points',
+      significant_only: sigOnly,
+      series_count: series.length,
+      series,
     });
   },
 );

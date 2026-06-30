@@ -11,6 +11,7 @@ Minimal MCP server for Home Assistant. Exposes entity state, service calls, and 
 | `list_entities` | List entities (optional `domain` filter) |
 | `get_state` | Full state + attributes for one `entity_id` |
 | `get_logbook` | Recent logbook events (default last 7 days, noise-filtered); `include_noisy: true` for raw |
+| `get_history` | Numerical state-change history for any entity (default last 24h). Wraps HA's `/api/history/period` — works for noisy sensors (`_signal`, `_battery`, `_energy`, etc.) that `get_logbook` filters out by design. `summarize: true` returns per-entity min/max/mean/count; raw mode is downsampled to `max_points` (default 500). |
 | `call_service` | Call any HA service — **subject to deny-list** |
 
 **Automations / scripts / scenes** — same six tools per domain:
